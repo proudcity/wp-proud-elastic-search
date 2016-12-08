@@ -15,3 +15,12 @@ License:            Affero GPL v3
 if ( class_exists( 'EP_Config' ) ) {
   require_once( plugin_dir_path(__FILE__) . 'lib/elasticsearch.class.php' );
 }
+
+// Settings page
+if( is_admin() && class_exists( 'ProudSettingsPage' ) ) {
+  function proud_search_elastic_settings() {
+    require_once( plugin_dir_path(__FILE__) . 'settings/elastic-settings.php' );
+  }
+  add_action( 'init', 'proud_search_elastic_settings' );
+}
+

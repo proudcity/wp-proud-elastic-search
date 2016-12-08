@@ -18,10 +18,8 @@ class ProudElasticSearch {
   public function __construct() {
     // Set Search cohort
     $this->search_cohort = get_option( 'proud-elastic-search-cohort' );
-    // d($this->search_cohort);
     // Set index name
     $this->index_name = get_option( 'proud-elastic-index-name' );
-    // d($this->index_name);
     // Alter index names to match our cohort
     add_filter( 'ep_index_name', array( $this, 'ep_index_name' ), 10, 2 );
     // Alters the 'all'
@@ -88,23 +86,44 @@ class ProudElasticSearch {
    * @return array
    */
   public function ep_weight_search( $formatted_args, $args ) {
-    // no 's', no need to weight
-    // if ( ! empty( $args['s'] ) ) {
-    //   $date_score = array(
-    //     'function_score' => array(
-    //       'query' => $formatted_args['query'],
-    //       'exp' => array(
-    //         'post_date_gmt' => array(
-    //           'scale' => apply_filters( 'epwr_scale', '14d', $formatted_args, $args ),
-    //           'decay' => apply_filters( 'epwr_decay', .25, $formatted_args, $args ),
-    //           'offset' => apply_filters( 'epwr_offset', '7d', $formatted_args, $args ),
-    //         ),
-    //       ),
-    //     ),
-    //   );
+    if ( ! empty( $args['s'] ) ) {
+      $weight_search = [
+        'function_score' => [
+          'query' => $formatted_args['query'],
+          'functions' => []
+        ]
+      ];
 
-    //   $formatted_args['query'] = $date_score;
-    // }
+      // Boost values for post type
+      $post_type_boost = [
+        'agency' => 2,
+        'question' => 1.9,
+        'payment' => 1.9,
+        'issue' => 1.9,
+        'page' => 1.5,
+        'event' => 1.2,
+        'proud_location' => 1.2
+      ];
+
+      foreach ( $post_type_boost as $name => $boost ) {
+        $weight_search['function_score']['functions'][] = [
+          'filter' => [
+            'term' => [
+              'post_type.raw' => $name
+            ]
+          ],
+          'weight' => $boost
+        ];
+      }
+
+      $formatted_args['query'] = $weight_search;
+
+      // Boost values for local results
+      $formatted_args['indices_boost'] = [
+        $this->index_name => 1.5
+      ];
+    }
+
 
     return $formatted_args;
   }
