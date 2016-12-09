@@ -6,9 +6,12 @@ Integration for elasticsearch, currently requires ElasticPress https://wordpress
 
 These must be set / evaluated before the plugin will operate as expected:
 
-### 'proud-elastic-agent-only'
+### 'proud-elastic-agent-type'
 
-If set to true, the plugin will be operating in agent mode only, which means only indexing and the global alias will be modified.
+Possible values:
+agent - sites that index but aren't on ProudCity. 
+subsite - sites using ProudCity, but only want to search their own content. 
+full - full site search capabilities
 
 ### 'proud-elastic-index-name'
 
