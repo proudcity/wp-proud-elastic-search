@@ -16,7 +16,7 @@ class ProudSearchElastic extends ProudSettingsPage
         ],
         '', // Option
         [ // Options
-          'proud-elastic-agent-only' => '1',
+          'proud-elastic-agent-type' => 'agent',
           'proud-elastic-index-name' => '',
           'proud-elastic-search-cohort' => []
         ] 
@@ -28,12 +28,15 @@ class ProudSearchElastic extends ProudSettingsPage
      */
     public function set_fields( ) {
       $this->fields = [
-       'proud-elastic-agent-only' => [
-          '#type' => 'checkbox',
-          '#title' =>  __( 'Index name', 'This is only an agent site' ),
-          '#return_value' => '1',
-          '#label_above' => false,
-          '#replace_title' => __pcHelp( 'This is only an agent site' ),
+       'proud-elastic-agent-type' => [
+          '#type' => 'radios',
+          '#title' =>  __( 'Agent Type', 'wp-proud-search-elastic' ),
+          '#options' => [
+            'agent' => 'Agent',
+            'subsite' => 'Sub Site',
+            'full' => 'Full'
+          ],
+          '#replace_title' => __pcHelp( 'Agent: sites that index but aren\'t on ProudCity. Sub Site: sites using ProudCity, but only want to search their own content. Full: full site search capabilities' ),
         ],
         'proud-elastic-index-name' => [
           '#type' => 'text',

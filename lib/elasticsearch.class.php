@@ -22,11 +22,23 @@ class ProudElasticSearch {
     $this->index_name = get_option( 'proud-elastic-index-name' );
     // Alter index names to match our cohort
     add_filter( 'ep_index_name', array( $this, 'ep_index_name' ), 10, 2 );
-    // Alters the 'all'
-    add_filter( 'ep_global_alias', array( $this, 'ep_global_alias' ) );
-    // If we're only in agent mode, just return
-    if( get_option( 'proud-elastic-agent-only' ) ) {
+    // What type of mode are we in?
+    $agent_type = self::get_agent_type();
+    // Search all in cohort
+    if( $agent_type === 'full' ) {
+      add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_full' ) );
+    }
+    // Search only this site
+    else {
+      add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_single' ) );
+    }
+    // If we're only in agent mode, don't load proud
+    if( $agent_type === 'agent' ) {
       return;
+    }
+    // Add an alter to search page
+    else if(  $agent_type === 'subsite' ) {
+      add_filter( 'proud_search_page_message', array( $this, 'search_page_message' ) );
     }
     // Alter proud search queries
     add_filter( 'wpss_search_query_args', array( $this, 'query_alter' ), 10, 3 );
@@ -45,6 +57,13 @@ class ProudElasticSearch {
   }
 
   /**
+   * Gets which mode elastic should be operating in
+   */
+  public static function get_agent_type() {
+    return get_option( 'proud-elastic-agent-type', 'agent' );
+  }
+
+  /**
    * Alters index name to our set value
    */
   public function ep_index_name( $index_name, $blog_id ) {
@@ -54,7 +73,14 @@ class ProudElasticSearch {
   /** 
    * Alters the network alias to use specific values
    */
-  public function ep_global_alias( $alias ) {
+  public function ep_global_alias_single( $alias ) {
+    return $this->index_name;
+  }
+
+  /** 
+   * Alters the network alias to use specific values
+   */
+  public function ep_global_alias_full( $alias ) {
     return implode( ',', array_keys( $this->search_cohort ) );
   }
 
@@ -142,9 +168,17 @@ class ProudElasticSearch {
    * Alters posts returned from elastic server
    */
   public function ep_retrieve_the_post( $post, $hit ) {
-    // @TODO evaluate multi site?
     $post['site_id'] = $hit['_index'];
     return $post;
+  }
+
+
+  /**
+   * Alters posts returned from elastic server
+   */
+  public function search_page_message( $message ) {
+    $alert = __( 'You are currently searching the ' . $this->cohort_name($this->index_name) . ' site, please visit the main site to search all content.' );
+    return $message . '<div class="alert alert-success">' . $alert . '</div>';
   }
 
   /**
