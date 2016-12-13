@@ -151,7 +151,7 @@ class ProudElasticSearch {
 
       // Add some weighting for menu_order
       $weight_search['function_score']['functions'][] = [
-        'exp' => [
+        'linear' => [
           'menu_order' => [
             'origin' => 0,
             'scale' => 100,
