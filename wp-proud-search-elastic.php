@@ -17,10 +17,14 @@ if ( class_exists( 'EP_Config' ) ) {
 }
 
 // Settings page
-if( is_admin() && class_exists( 'ProudSettingsPage' ) ) {
-  function proud_search_elastic_settings() {
-    require_once( plugin_dir_path(__FILE__) . 'settings/elastic-settings.php' );
+if( is_admin() ) {
+  if( class_exists( 'ProudSettingsPage' ) ) {
+    function proud_search_elastic_settings() {
+      require_once( plugin_dir_path(__FILE__) . 'settings/elastic-settings.php' );
+    }
+    add_action( 'init', 'proud_search_elastic_settings' );
   }
-  add_action( 'init', 'proud_search_elastic_settings' );
+  else {
+    require_once( plugin_dir_path(__FILE__) . 'settings/proud-elastic-agent.php' );
+  }
 }
-

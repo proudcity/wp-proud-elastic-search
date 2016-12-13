@@ -113,6 +113,13 @@ class ProudElasticSearch {
    */
   public function ep_weight_search( $formatted_args, $args ) {
     if ( ! empty( $args['s'] ) ) {
+      // Boost title ?
+      $boost_title = !empty( $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] )
+                  && 'post_title' === $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0];
+      if( $boost_title ) {
+        $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] = 'post_title^2';
+      }
+
       $weight_search = [
         'function_score' => [
           'query' => $formatted_args['query'],
@@ -126,9 +133,9 @@ class ProudElasticSearch {
         'question' => 1.9,
         'payment' => 1.9,
         'issue' => 1.9,
-        'page' => 1.5,
+        'page' => 1.3,
         'event' => 1.2,
-        'proud_location' => 1.2
+        'proud_location' => 1.1
       ];
 
       foreach ( $post_type_boost as $name => $boost ) {
@@ -142,11 +149,22 @@ class ProudElasticSearch {
         ];
       }
 
+      // Add some weighting for menu_order
+      $weight_search['function_score']['functions'][] = [
+        'exp' => [
+          'menu_order' => [
+            'origin' => 0,
+            'scale' => 100,
+          ]
+        ]
+      ];
+
+
       $formatted_args['query'] = $weight_search;
 
       // Boost values for local results
       $formatted_args['indices_boost'] = [
-        $this->index_name => 1.5
+        $this->index_name => 1.1
       ];
     }
 
