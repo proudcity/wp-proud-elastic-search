@@ -16,6 +16,7 @@ class ProudElasticSearch {
    * Constructor
    */
   public function __construct() {
+    add_action( 'plugins_loaded', array( $this, 'check_modules' ) );
     // Set Search cohort
     $this->search_cohort = get_option( 'proud-elastic-search-cohort' );
     // Set index name
@@ -54,6 +55,30 @@ class ProudElasticSearch {
     add_filter( 'proud_search_post_args', array( $this, 'post_args' ), 10, 2 );
     // Alter ajax searchr results
     add_filter( 'proud_search_ajax_post', array( $this, 'ajax_post' ), 10, 2 );
+  }
+
+  /**
+   * Sets alert message on admin
+   */
+  public function modules_error() {
+    $class = 'notice notice-error';
+    $message = __( 'Proud ElasticSearch functions best when all ElasticPress modules are disabled, please head over and make sure: ', 'proud-elasticsearch' );
+    printf( 
+      '<div class="%1$s"><p>%2$s%3$s</p></div>', 
+      $class, 
+      $message, 
+      '<a href="/wp-admin/admin.php?page=elasticpress">disable modules</a>.' 
+    ); 
+  }
+
+  /** 
+   * Makes sure ElasticPress modules aren't enabled
+   */
+  public function check_modules() { 
+    $active_ep = \EP_Modules::factory()->get_active_modules();
+    if( !empty($active_ep) ) {
+      add_action( 'admin_notices', array( $this, 'modules_error' ) );
+    }
   }
 
   /**
@@ -167,7 +192,6 @@ class ProudElasticSearch {
         $this->index_name => 1.1
       ];
     }
-
 
     return $formatted_args;
   }
