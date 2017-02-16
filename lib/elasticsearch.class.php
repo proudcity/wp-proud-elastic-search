@@ -28,8 +28,6 @@ class ProudElasticSearch {
     $this->agent_type = get_option( 'proud-elastic-agent-type', 'agent' );
     // Alter index names to match our cohort
     add_filter( 'ep_index_name', array( $this, 'ep_index_name' ), 10, 2 );
-    // Alter mappings for additional plugins
-    add_filter( 'ep_config_mapping', array( $this, 'ep_config_mapping' ), 10 );
     // Allow meta mappings
     add_filter( 'ep_prepare_meta_allowed_protected_keys', array( $this, 'ep_prepare_meta_allowed_protected_keys' ), 10 );
     // Search all in cohort
@@ -40,6 +38,8 @@ class ProudElasticSearch {
     else {
       add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_single' ) );
     }
+    // // Make sure outgoing posts have SOME post_content
+    add_filter( 'ep_post_sync_args', array($this, 'ep_post_sync_args') );
     // If we're only in agent mode, don't load proud
     if( $this->agent_type === 'agent' ) {
       return;
@@ -48,10 +48,11 @@ class ProudElasticSearch {
     else if(  $this->agent_type === 'subsite' ) {
       add_filter( 'proud_search_page_message', array( $this, 'search_page_message' ) );
     }
-    // Full site
-    else {
-       add_filter( 'proud_search_page_message', array( $this, 'search_page_filters' ) );
-    }
+    // Modify search page template 
+    add_filter( 'proud_search_page_template', array( $this, 'search_page_template' ) );
+    // Modify settings for widgets
+    add_filter( 'proud_teaser_settings', array( $this, 'proud_teaser_settings' ), 10, 2 );
+    add_filter( 'proud_teaser_extra_options', array( $this, 'proud_teaser_extra_options' ), 10, 2 );
     // Alter proud search queries
     add_filter( 'wpss_search_query_args', array( $this, 'query_alter' ), 10, 2 );
     add_filter( 'proud_teaser_query_args', array( $this, 'query_alter' ), 10, 2 );
@@ -72,12 +73,14 @@ class ProudElasticSearch {
     add_filter( 'the_title', array( $this, 'the_title' ), 10, 2 );
     add_filter( 'post_link', array( $this, 'post_link' ), 10, 2 );
     add_filter( 'post_type_link', array( $this, 'post_link' ), 10, 2 );
+    add_filter( 'post_class', array( $this, 'post_class' ), 10, 3 );
     // Alter search results
     add_filter( 'proud_search_post_url', array( $this, 'search_post_url' ), 10, 2 );
     add_filter( 'proud_search_post_args', array( $this, 'search_post_args' ), 10, 2 );
     // Alter ajax searchr results
     add_filter( 'proud_search_ajax_post', array( $this, 'search_ajax_post' ), 10, 2 );
   }
+
 
   /**
    * Sets alert message on admin
@@ -120,16 +123,6 @@ class ProudElasticSearch {
   /**
    * Alters es mapping
    */
-  public function ep_config_mapping( $mapping ) {
-    // $mapping['mappings']['post']['_index'] = [
-    //   'enabled' => true
-    // ];
-    return $mapping;
-  }
-
-  /**
-   * Alters es mapping
-   */
   public function ep_prepare_meta_allowed_protected_keys( $allowed_protected_keys ) {
     // Adding event end timestamp
     $allowed_protected_keys[] = '_end_ts';
@@ -152,6 +145,21 @@ class ProudElasticSearch {
     return implode( ',', array_keys( $this->search_cohort ) );
   }
 
+  /** 
+   * Alters outgoing post sync
+   */
+  public function ep_post_sync_args( $post_args ) {
+    // Events are returning un-desireable results due to html
+    // we get weird full html markup in results
+    if( $post_args['post_type'] === 'event' ) {
+      $post = get_post($post_args['ID']);
+      if( $post && isset( $post->post_content ) ) {
+        $post_args['post_content'] = $post->post_content;
+      }
+    }
+    return $post_args;
+  }
+
   /**
    * Attaches global elastic integation query items
    */
@@ -162,11 +170,17 @@ class ProudElasticSearch {
     if( 'full' !== $this->agent_type ) {
       return;
     }
-    // Filter for certain site index
+    // Filter for certain site index from form
     $filter_index = !empty( $config['form_instance']['filter_index'] ) 
                  && 'all' !== $config['form_instance']['filter_index'];
     if( $filter_index ) {
       $query_args['filter_index'] = $config['form_instance']['filter_index'];
+    }
+    // Filter for site index by teaser settings
+    if( !empty( $config['options']['elastic_index'] ) ) {
+      $query_args['filter_index'] = $config['options']['elastic_index'] === 'all'
+                                  ? $this->ep_global_alias_full(true)
+                                  : $config['options']['elastic_index']; 
     }
   }
 
@@ -183,7 +197,9 @@ class ProudElasticSearch {
     // Proud search query ?
     $run_elastic = !empty( $query_args['proud_search_ajax'] ) // ajax search
                 || !empty( $query_args['proud_teaser_search'] ) // site search
-                || !empty( $query_args['proud_teaser_query'] ); // teaser listings 
+                || !empty( $query_args['proud_teaser_query'] ) // teaser listings 
+                || !empty( $config['options']['elastic_index'] ); // teaser listing with index
+
     if( $run_elastic ) {
       // Ajax search
       if( !empty( $query_args['proud_search_ajax'] ) ) {
@@ -191,24 +207,26 @@ class ProudElasticSearch {
       }
       // Add aggregations ?
       else if( !empty( $config['type'] ) ) {
+        $this->query_args( $query_args, $config );
         // Is search
         if( !empty( $query_args['proud_teaser_search'] ) ) {
-          $this->query_args( $query_args );
-          $query_args['aggs'] = [
-            'name'       => 'search_aggregation', // (can be whatever you'd like)
-            'use-filter' => true, // (*bool*) used if you'd like to apply the other filters (i.e. post type, tax_query)
-            'aggs' => [
-              'post_type' => [
-                'terms' => [
-                  'field' => "post_type.raw",
+          if( !empty( $config['form_id_base'] ) ) {
+            $this->forms[] = $config['form_id_base'];
+            $query_args['aggs'] = [
+              'name'       => 'search_aggregation', // (can be whatever you'd like)
+              'use-filter' => true, // (*bool*) used if you'd like to apply the other filters (i.e. post type, tax_query)
+              'aggs' => [
+                'post_type' => [
+                  'terms' => [
+                    'field' => "post_type.raw",
+                  ],
                 ],
               ],
-            ],
-          ];
+            ];
+          }
         }
         // Teaser listing
         else {
-          $this->query_args( $query_args );
           // Alter category listings?
           $alter_cats = !empty( $config['taxonomy'] )
                      && !empty( $config['form_id_base'] );
@@ -256,42 +274,6 @@ class ProudElasticSearch {
     return $enabled;
   }
 
-    /**
-   * Alters filter markup from proud teaser
-   * 
-   * @param array $filters
-   * @param array $config[ 'type' => post_type, 'options' => extra_options ] 
-   */
-  public function proud_teaser_filters( $filters, $config ) {
-    if( 'full' === $this->agent_type ) {
-      // Add index filter?
-      $site_filter = 'search' === $config['type'];
-      if( $site_filter ) {
-        $options = [
-          'all' => 'All Sites'
-        ];
-        // Add in our cohort
-        $options = $options + array_map( create_function( '$o', 'return $o["name"];' ), $this->search_cohort );
-        $index = [
-          'filter_index' => [
-            '#title' => __( 'Type', 'proud-teaser' ),
-            '#type' => 'radios',
-            '#options' => $options,
-            '#default_value' => 'all',
-            '#description' => ''
-          ]
-        ];
-        $filters = $filters + $index;
-      }
-      // // unset search term filter
-      // if( 'search' === $config['type'] ) {
-      //   // $filters['term'] );
-      // }
-    }
-
-    return $filters;
-  }
-
   /**
    * Search weight
    * 
@@ -327,7 +309,7 @@ class ProudElasticSearch {
       ];
 
       // Boost content types?
-      if( !empty( $args['proud_teaser_search'] ) ) {
+      if( !empty( $args['proud_teaser_search'] ) || !empty( $args['proud_search_ajax'] ) ) {
         // Boost values for post type
         $post_type_boost = [
           'agency' => 2,
@@ -349,6 +331,20 @@ class ProudElasticSearch {
             'weight' => $boost
           ];
         }
+
+        // Add weighting for events
+        $now = new DateTime();
+        // Add some weighting for menu_order
+        $weight_search['function_score']['functions'][] = [
+          'exp' => [
+            'meta._end_ts.long' => [
+              'origin' => $now->getTimestamp(),
+              'scale' => 5 * 60 * 60 * 24,
+              'offset' => 1 * 60 * 60 * 24,
+              'decay' => 0.5
+            ]
+          ]
+        ];
       }
 
       $formatted_args['query'] = $weight_search;
@@ -401,6 +397,69 @@ class ProudElasticSearch {
     self::$aggregations = $aggregations;
   }
 
+  /** 
+   * Modify teaser settings to allow certain index to be searched
+   */
+  public function proud_teaser_settings( $settings, $post_type = false ) {
+    if( $post_type && ( $post_type === 'post' || $post_type === 'event' ) ) {
+      $options = array_map( create_function( '$o', 'return $o["name"];' ), $this->search_cohort );
+      // Mod index name
+      $options[$this->index_name] = __( 'This site only', 'wp-proud-search-elastic' );
+      // Add all option
+      $options['all'] = __( 'All Sites', 'wp-proud-search-elastic' );
+      $settings['elastic_index'] = [
+        '#title' => __( 'Content source', 'proud-teaser' ),
+        '#type' => 'radios',
+        '#options' => $options,
+        '#default_value' => $this->index_name,
+        '#description' => 'Where should this content be served from?'
+      ]; 
+    }
+    return $settings;
+  }
+
+  /** 
+   * Modify teaser settings to allow certain index to be searched
+   */
+  public function proud_teaser_extra_options( $options, $instance ) {
+    if( !empty( $instance['elastic_index'] ) ) {
+      $options['elastic_index'] = $instance['elastic_index'];
+    }
+    return $options;
+  }
+
+  /**
+   * Alters filter markup from proud teaser
+   * 
+   * @param array $filters
+   * @param array $config[ 'type' => post_type, 'options' => extra_options ] 
+   */
+  public function proud_teaser_filters( $filters, $config ) {
+    if( 'full' === $this->agent_type ) {
+      // Add index filter?
+      $site_filter = 'search' === $config['type'];
+      if( $site_filter ) {
+        $options = [
+          'all' => __( 'All Sites', 'wp-proud-search-elastic' )
+        ];
+        // Add in our cohort
+        $options = $options + array_map( create_function( '$o', 'return $o["name"];' ), $this->search_cohort );
+        $index = [
+          'filter_index' => [
+            '#title' => __( 'Search Site', 'proud-teaser' ),
+            '#type' => 'radios',
+            '#options' => $options,
+            '#default_value' => 'all',
+            '#description' => ''
+          ]
+        ];
+        $filters = $filters + $index;
+      }
+    }
+
+    return $filters;
+  }
+
   /**
    * Alter filters output, add aggregation
    * 
@@ -431,8 +490,28 @@ class ProudElasticSearch {
           }
         }
       }
+      // Post types
+      if( !empty( $fields['filter_post_type'] ) ) { 
+        // We have aggregations
+        if( !empty( self::$aggregations['search_aggregation']['post_type']['buckets'] ) ) {
+          // Add all tag no matter what
+          $options = ['all' => $fields['filter_post_type']['#options']['all']];
+          foreach ( self::$aggregations['search_aggregation']['post_type']['buckets'] as $key => $term ) {
+            $options[$term['key']] = $fields['filter_post_type']['#options'][$term['key']] 
+                                   . ' (' . $term['doc_count'] . ')';
+          }
+          $fields['filter_post_type']['#options'] = $options;
+        }
+      }
     } 
     return $fields;
+  }
+
+  /**
+   * Search page filters
+   */
+  public function search_page_template( $path ) {
+    return plugin_dir_path(__FILE__) . '../templates/search-page.php';
   }
 
   /**
@@ -457,6 +536,17 @@ class ProudElasticSearch {
   /**
    * Alters posts returned from elastic server
    */
+  public function post_class( $classes, $class, $ID ) {
+    global $post;
+    if( !$this->is_local( $post ) ) {
+      $classes[] = 'external-post';
+    }
+    return $classes;
+  }
+
+  /**
+   * Alters posts returned from elastic server
+   */
   public function post_link( $permalink, $post ) {
     if( !$this->is_local( $post ) ) {
       $permalink = $post->permalink;
@@ -470,13 +560,6 @@ class ProudElasticSearch {
   public function search_page_message( $message ) {
     $alert = __( 'You are currently searching the ' . $this->cohort_name($this->index_name) . ' site, please visit the main site to search all content.' );
     return $message . '<div class="alert alert-success">' . $alert . '</div>';
-  }
-
-  /**
-   * Search page filters
-   */
-  public function search_page_filters( $message ) {
-    // d(self::$aggregations);
   }
 
   /**
