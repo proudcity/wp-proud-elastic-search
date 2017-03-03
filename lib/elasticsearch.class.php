@@ -100,7 +100,7 @@ class ProudElasticSearch {
    * Makes sure ElasticPress modules aren't enabled
    */
   public function check_modules() { 
-    $active_ep = \EP_Modules::factory()->get_active_modules();
+    $active_ep = get_option( 'ep_feature_settings', array() );
     if( !empty($active_ep) ) {
       add_action( 'admin_notices', array( $this, 'modules_error' ) );
     }
