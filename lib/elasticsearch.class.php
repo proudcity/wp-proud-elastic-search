@@ -102,7 +102,12 @@ class ProudElasticSearch {
   public function check_modules() { 
     $active_ep = get_option( 'ep_feature_settings', array() );
     if( !empty($active_ep) ) {
-      add_action( 'admin_notices', array( $this, 'modules_error' ) );
+      foreach ( $active_ep as $feature ) {
+        if( $feature['active'] ) {
+          add_action( 'admin_notices', array( $this, 'modules_error' ) );
+          break;
+        }
+      }
     }
   }
 
