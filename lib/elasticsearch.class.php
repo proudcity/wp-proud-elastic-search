@@ -7,6 +7,8 @@ if ( ! defined( 'ABSPATH' ) ) {
   exit; // Exit if accessed directly.
 }
 
+define( 'ATTACHMENT_MAX', 10 );
+
 class ProudElasticSearch {
 
   public $search_cohort; // array of sites that elastic search is using
@@ -20,6 +22,10 @@ class ProudElasticSearch {
    */
   public function __construct() {
     add_action( 'plugins_loaded', array( $this, 'check_modules' ) );
+
+    // Modifying indexes to allow our idea of multisite
+    // -----------------------------------
+
     // Set Search cohort
     $this->search_cohort = get_option( 'proud-elastic-search-cohort' );
     // Set index name
@@ -28,8 +34,18 @@ class ProudElasticSearch {
     $this->agent_type = get_option( 'proud-elastic-agent-type', 'agent' );
     // Alter index names to match our cohort
     add_filter( 'ep_index_name', array( $this, 'ep_index_name' ), 10, 2 );
+
+    // Deal with elastic mapping
+    // -----------------------------------
+
+    // DOCUMENTS: Alter mapping sent to ES (USE STOCK EP DOCUMENTS FUNCs)
+    add_action( 'ep_cli_put_mapping', 'ep_documents_create_pipeline' );
+    add_action( 'ep_dashboard_put_mapping', 'ep_documents_create_pipeline' );
+    add_filter( 'ep_config_mapping', 'attachments_mapping' );
+
     // Allow meta mappings
     add_filter( 'ep_prepare_meta_allowed_protected_keys', array( $this, 'ep_prepare_meta_allowed_protected_keys' ), 10 );
+    
     // Search all in cohort
     if( $this->agent_type === 'full' ) {
       add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_full' ) );
@@ -38,8 +54,23 @@ class ProudElasticSearch {
     else {
       add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_single' ) );
     }
-    // // Make sure outgoing posts have SOME post_content
-    add_filter( 'ep_post_sync_args', array($this, 'ep_post_sync_args') );
+
+    // Posting to elastic
+    // -----------------------------------
+
+    //  DOCUMENTS: Add attachment ingest to post
+    // add_filter( 'ep_index_post_request_path', array( $this, 'ep_documents_index_post_request_path' ), 999, 2 );
+    //  DOCUMENTS: Add attachment ingest bulk request (USE STOCK EP DOCUMENTS FUNC)
+    // add_filter( 'ep_bulk_index_post_request_path', 'ep_documents_bulk_index_post_request_path', 999, 1 );
+    //  DOCUMENTS: Modify Sync args
+    add_filter( 'ep_post_sync_args_post_prepare_meta', array($this, 'ep_post_sync_args_post_prepare_meta'), 999, 1 );
+
+    // Send our data to to the node server
+    // ------------------------------------
+
+    add_filter( 'ep_bulk_index_posts_request_args', array( $this, 'send_documents_to_processing'), 999, 2 );
+    add_filter( 'ep_index_post_request_args', array( $this, 'send_documents_to_processing'), 999, 2 );
+
     // If we're only in agent mode, don't load proud
     if( $this->agent_type === 'agent' ) {
       return;
@@ -48,8 +79,19 @@ class ProudElasticSearch {
     else if(  $this->agent_type === 'subsite' ) {
       add_filter( 'proud_search_page_message', array( $this, 'search_page_message' ) );
     }
+
+    // Searching
+    // ------------------------------------
+
     // Modify search page template 
     add_filter( 'proud_search_page_template', array( $this, 'search_page_template' ) );
+
+    // DOCUMENTS: Add attachment to search fields
+    add_filter( 'ep_search_fields', array( $this, 'ep_search_fields' ) );
+
+    // Integrate with proud teaser plugin + elasticpress
+    // -----------------------------------
+
     // Modify settings for widgets
     add_filter( 'proud_teaser_settings', array( $this, 'proud_teaser_settings' ), 10, 2 );
     add_filter( 'proud_teaser_extra_options', array( $this, 'proud_teaser_extra_options' ), 10, 2 );
@@ -68,8 +110,15 @@ class ProudElasticSearch {
     add_action( 'ep_retrieve_aggregations', array( $this, 'ep_retrieve_aggregations' ), 10, 1 );
     // Modify form output
     add_filter( 'proud-form-filled-fields', array( $this, 'form_filled_fields' ), 10, 3 );
+
+    // UI + proud-search integration
+    // -----------------------------------
+
     // Respond to search retrieval
     add_filter( 'ep_retrieve_the_post', array( $this, 'ep_retrieve_the_post' ), 10, 2 );
+    // Make sure our fields are added
+    add_filter( 'ep_search_post_return_args', array( $this, 'ep_search_post_return_args' ) );
+    // Helpers to display post as we want
     add_filter( 'the_title', array( $this, 'the_title' ), 10, 2 );
     add_filter( 'post_link', array( $this, 'post_link' ), 10, 2 );
     add_filter( 'post_type_link', array( $this, 'post_link' ), 10, 2 );
@@ -128,6 +177,14 @@ class ProudElasticSearch {
   /**
    * Alters es mapping
    */
+  public function ep_config_mapping( $mapping ) {
+    // Adds elastic search attachments
+    return attachments_mapping($mapping);
+  }
+
+  /**
+   * Alters es mapping
+   */
   public function ep_prepare_meta_allowed_protected_keys( $allowed_protected_keys ) {
     // Adding event end timestamp
     $allowed_protected_keys[] = '_end_ts';
@@ -150,10 +207,100 @@ class ProudElasticSearch {
     return implode( ',', array_keys( $this->search_cohort ) );
   }
 
+  /**
+   * Posts to helper api
+   */
+  public function post_to_helper_api( $post_args ) {    
+    $args = [
+      'method' => 'POST',
+      'headers' => array(),
+      'body' => new stdClass,
+    ];
+
+    $args['body']->path = $this->ep_document_request_path( $post_args['ID'] );
+    $args['body']->post = $post_args;
+
+    $request = wp_remote_request( EP_HELPER_HOST, $args );
+  }
+
+  /**
+   * Should we process attachments
+   * @returns the document if so
+   */
+  public function process_attachments( $post_args ) {
+    // Trying to stop autosave
+    if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+        return;
+    }
+
+    // Trying to stop autosave
+    if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
+        return;
+    }
+    if( $post_args['post_type'] === 'document' ) {
+      if( !empty( $post_args['post_meta']['document'] ) ) {
+        foreach ( $post_args['post_meta']['document'] as $key => $document ) {
+          if( !empty( $post_args['post_meta']['document_meta'][$key] ) ) {
+            try {
+              $meta = json_decode( $post_args['post_meta']['document_meta'][$key] );
+              $has_meta = !empty( $meta ) 
+                       && !empty( $meta->size )
+                       && !empty( $meta->mime )
+                       && in_array( $meta->mime, ep_documents_get_allowed_ingest_mime_types() );
+
+              if ( !$has_meta ) {
+                return false;
+              }
+
+              // Check size for transmission limit
+              $is_small_mb = strripos( $meta->size, 'mb' )
+                          && (int) preg_replace( '/[^0-9]/', '', $meta->size ) < ATTACHMENT_MAX;
+              // Send request to processing
+              if ( $is_small_mb || strripos($meta->size, 'kb' ) ) {
+                $post_args['attachments'][] = $document;
+              }
+            } catch (Exception $e) {
+              print_r($e);
+            }
+          }
+        }
+        if( !empty( $post_args['attachments'] ) ) {
+          $this->post_to_helper_api($post_args);
+        }
+      }
+    }
+    // return false;
+  }
+
+  /**
+   * See elasticpress/features/documents/documents/
+   * func ep_documents_index_post_request_path
+   */
+  public function ep_document_request_path($id) {
+    static $index = null; 
+    if (!$index) {
+      $index = ep_get_index_name();
+    }
+    return trailingslashit( $index ) . 'post/' . $id . '?pipeline=' . apply_filters( 'ep_documents_pipeline_id', $index . '-attachment' );
+  }
+
+  // /**
+  //  * Change Elasticsearch request path if processing attachment
+  //  *
+  //  * @param string $path
+  //  * @param array $post
+  //  * @since  2.3
+  //  * @return string
+  //  */
+  // public function ep_documents_index_post_request_path( $path, $post ) {
+  //   $this->process_attachments($post);
+  //   return $path;
+  // }
+
   /** 
    * Alters outgoing post sync
    */
-  public function ep_post_sync_args( $post_args ) {
+  public function ep_post_sync_args_post_prepare_meta( $post_args ) {
     // Events are returning un-desireable results due to html
     // we get weird full html markup in results
     if( $post_args['post_type'] === 'event' ) {
@@ -161,8 +308,41 @@ class ProudElasticSearch {
       if( $post && isset( $post->post_content ) ) {
         $post_args['post_content'] = $post->post_content;
       }
-    }
+    } 
+
+    // Add attachments to everything
+    $post_args['attachments'] = [];
+    $document = $this->process_attachments($post_args);
+    //Resets the value after posting to helper
+    $post_args['attachments'] = [];
     return $post_args;
+  }
+
+  /** 
+   * Sends to node processing
+   */
+  public function send_documents_to_processing($post_args, $body) {
+    // if( !empty( self::$attachments_ledger ) ) {
+
+    // }
+    return $post_args;
+  }
+
+
+  /**
+   * Add attachment field for search
+   *
+   * @param $search_fields
+   * @since  2.3
+   * @return array
+   */
+  public function ep_search_fields( $search_fields ) {
+    if ( ! is_array( $search_fields ) ) {
+      return $search_fields;
+    }
+    
+    $search_fields[] = 'attachments.attachment.content';
+    return $search_fields;
   }
 
   /**
@@ -355,6 +535,20 @@ class ProudElasticSearch {
       $formatted_args['query'] = $weight_search;
     }
 
+    // Add highlighting for attachments
+    $formatted_args['highlight'] = [
+      'fields' => [
+        'attachments.attachment.content' => new stdClass,
+        'post_content' => new stdClass,
+      ]
+    ];
+
+    // But also don't return the source since we don't want to be transmitting
+    // 3mb of document
+    $formatted_args['_source'] = [
+      'excludes'=> [ 'attachments*data', 'attachments*content' ]
+    ];
+
     // A make sure sort doesn't break on "field doesn't exist"
     if ( !empty( $formatted_args['sort'] ) ) {
       foreach ( $formatted_args['sort'] as $outer_key => &$sort_outer ) {
@@ -392,6 +586,8 @@ class ProudElasticSearch {
     }
     return $path;
   }
+
+  // do_action( 'ep_retrieve_raw_response', $request, $args, $scope, $query_args );
 
   /**
    * Save the aggregation results from the last executed query.
@@ -523,8 +719,29 @@ class ProudElasticSearch {
    * Alters posts returned from elastic server
    */
   public function ep_retrieve_the_post( $post, $hit ) {
+    // Deal with highlights
+    if( !empty( $hit['highlight'] ) ) {
+      $post['search_highlight'] = [];
+      foreach ( $hit['highlight'] as $key => $value ) {
+        $text = implode(' <span class="search-seperator">...</span> ', array_slice( $value, 0, 10 ) ); 
+        if( $key === 'attachments.attachment.content' ) {
+          $post['search_highlight']['attachments'] = $text;
+        }
+        else {
+          $post['search_highlight'][$key] = $text;
+        }
+      }
+    }
     $post['site_id'] = $hit['_index'];
     return $post;
+  }
+
+  /**
+   * Makes sure our values set above are on the post
+   */
+  public function ep_search_post_return_args($args) {
+    $args[] = 'search_highlight';
+    return $args;
   }
 
   /**
