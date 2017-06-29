@@ -123,6 +123,8 @@ class ProudElasticSearch {
     add_filter( 'post_link', array( $this, 'post_link' ), 10, 2 );
     add_filter( 'post_type_link', array( $this, 'post_link' ), 10, 2 );
     add_filter( 'post_class', array( $this, 'post_class' ), 10, 3 );
+    // Add matching to search results
+    add_action( 'teaser_search_matching', array( $this, 'teaser_search_matching' ) );
     // Alter search results
     add_filter( 'proud_search_post_url', array( $this, 'search_post_url' ), 10, 2 );
     add_filter( 'proud_search_post_args', array( $this, 'search_post_args' ), 10, 2 );
@@ -468,12 +470,34 @@ class ProudElasticSearch {
    * @return array
    */
   public function ep_weight_search( $formatted_args, $args ) {
+
     if ( ! empty( $args['s'] ) ) {
+
       // Boost title ?
       $boost_title = !empty( $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] )
                   && 'post_title' === $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0];
+
       if( $boost_title ) {
         $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] = 'post_title^2';
+      }
+
+      // We're in a content listing 
+      if( empty( $args['proud_teaser_search'] ) && empty( $args['proud_search_ajax'] ) ) {
+
+        // Get rid of other sorting on content listings if there is a search
+        if( empty($formatted_args['sort'][0]['_score']) ) {
+          $formatted_args['sort'][] = $formatted_args['sort'][0];
+          $formatted_args['sort'][0] = [
+            '_score' => [ 'order' => 'desc' ],
+          ];
+        }
+
+        // Drop fuzzy searching
+        $drop_fuzzy = !empty( $formatted_args['query']['bool']['should'][2]['multi_match']['fuzziness'] )
+                   && $formatted_args['query']['bool']['should'][2]['multi_match']['fuzziness'] > 0;
+        if( $drop_fuzzy ) {
+          $formatted_args['query']['bool']['should'][2]['multi_match']['fuzziness'] = 0;
+        }
       }
 
       $weight_search = [
@@ -493,7 +517,7 @@ class ProudElasticSearch {
         ]
       ];
 
-      // Boost content types?
+      // Boost content types (normal search)
       if( !empty( $args['proud_teaser_search'] ) || !empty( $args['proud_search_ajax'] ) ) {
         // Boost values for post type
         $post_type_boost = [
@@ -602,11 +626,14 @@ class ProudElasticSearch {
    * Modify teaser settings to allow certain index to be searched
    */
   public function proud_teaser_settings( $settings, $post_type = false ) {
-    if( $post_type && ( $post_type === 'post' || $post_type === 'event' ) ) {
+    if( !$post_type ) {
+      return $settings;
+    }
+    if( $post_type === 'document' || $post_type === 'post' || $post_type === 'event' ) {
       $options = array_map( create_function( '$o', 'return $o["name"];' ), $this->search_cohort );
+      // @TODO make the integration automatic for single site installs
       // Mod index name
       $options[$this->index_name] = __( 'This site only', 'wp-proud-search-elastic' );
-      // Add all option
       $options['all'] = __( 'All Sites', 'wp-proud-search-elastic' );
       $settings['elastic_index'] = [
         '#title' => __( 'Content source', 'proud-teaser' ),
@@ -623,6 +650,8 @@ class ProudElasticSearch {
    * Modify teaser settings to allow certain index to be searched
    */
   public function proud_teaser_extra_options( $options, $instance ) {
+    // d($instance);
+    // exit();
     if( !empty( $instance['elastic_index'] ) ) {
       $options['elastic_index'] = $instance['elastic_index'];
     }
@@ -829,6 +858,13 @@ class ProudElasticSearch {
     return '<span class="label" style="background-color:' 
          . $this->cohort_color( $id ) . '">'
          . $this->cohort_name( $id ) . '</span>';
+  }
+
+  public function teaser_search_matching($post) {
+    if ( empty( $post->search_highlight ) ) {
+      return;
+    }
+    include( plugin_dir_path(__FILE__) . '../templates/teaser-search-matching.php' );
   }
 
   /**
