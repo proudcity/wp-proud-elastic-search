@@ -212,7 +212,18 @@ class ProudElasticSearch {
   /**
    * Posts to helper api
    */
-  public function post_to_helper_api( $post_args ) {    
+  public function post_to_helper_api( $post_args ) {
+    // For some reason the live version is trying to send this request
+    // multiple times in a row...
+    // @TODO figure out why
+    static $currently_calling = null;
+    if ( $currently_calling === $post_args['ID'] ) {
+      return;
+    } 
+    // Set our static
+    $currently_calling = $post_args['ID'];
+
+    //Deal with posting 
     $args = [
       'method' => 'POST',
       'headers' => array(),
