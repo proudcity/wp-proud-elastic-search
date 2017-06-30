@@ -14,6 +14,7 @@ class ProudElasticSearch {
   public $search_cohort; // array of sites that elastic search is using
   public $index_name; // the index name of this site
   public $agent_type; // mode we're operating in
+  public $attachments;
   public $forms = []; // The forms we should alter with aggregations, ect
   public static $aggregations; // Result counts
   
@@ -34,14 +35,18 @@ class ProudElasticSearch {
     $this->agent_type = get_option( 'proud-elastic-agent-type', 'agent' );
     // Alter index names to match our cohort
     add_filter( 'ep_index_name', array( $this, 'ep_index_name' ), 10, 2 );
+    // Are we processing attachments?
+    $this->attachments_api = defined( 'EP_HELPER_HOST' ) ? defined( 'EP_HELPER_HOST' ) : false;
 
     // Deal with elastic mapping
     // -----------------------------------
 
     // DOCUMENTS: Alter mapping sent to ES (USE STOCK EP DOCUMENTS FUNCs)
-    add_action( 'ep_cli_put_mapping', 'ep_documents_create_pipeline' );
-    add_action( 'ep_dashboard_put_mapping', 'ep_documents_create_pipeline' );
-    add_filter( 'ep_config_mapping', 'attachments_mapping' );
+    if ( $this->attachments_api ) {
+      add_action( 'ep_cli_put_mapping', 'ep_documents_create_pipeline' );
+      add_action( 'ep_dashboard_put_mapping', 'ep_documents_create_pipeline' );
+      add_filter( 'ep_config_mapping', 'attachments_mapping' );
+    }
 
     // Allow meta mappings
     add_filter( 'ep_prepare_meta_allowed_protected_keys', array( $this, 'ep_prepare_meta_allowed_protected_keys' ), 10 );
@@ -58,18 +63,7 @@ class ProudElasticSearch {
     // Posting to elastic
     // -----------------------------------
 
-    //  DOCUMENTS: Add attachment ingest to post
-    // add_filter( 'ep_index_post_request_path', array( $this, 'ep_documents_index_post_request_path' ), 999, 2 );
-    //  DOCUMENTS: Add attachment ingest bulk request (USE STOCK EP DOCUMENTS FUNC)
-    // add_filter( 'ep_bulk_index_post_request_path', 'ep_documents_bulk_index_post_request_path', 999, 1 );
-    //  DOCUMENTS: Modify Sync args
     add_filter( 'ep_post_sync_args_post_prepare_meta', array($this, 'ep_post_sync_args_post_prepare_meta'), 999, 1 );
-
-    // Send our data to to the node server
-    // ------------------------------------
-
-    add_filter( 'ep_bulk_index_posts_request_args', array( $this, 'send_documents_to_processing'), 999, 2 );
-    add_filter( 'ep_index_post_request_args', array( $this, 'send_documents_to_processing'), 999, 2 );
 
     // If we're only in agent mode, don't load proud
     if( $this->agent_type === 'agent' ) {
@@ -87,7 +81,9 @@ class ProudElasticSearch {
     add_filter( 'proud_search_page_template', array( $this, 'search_page_template' ) );
 
     // DOCUMENTS: Add attachment to search fields
-    add_filter( 'ep_search_fields', array( $this, 'ep_search_fields' ) );
+    if ( $this->attachments_api ) {
+      add_filter( 'ep_search_fields', array( $this, 'ep_search_fields' ) );
+    }
 
     // Integrate with proud teaser plugin + elasticpress
     // -----------------------------------
@@ -179,14 +175,6 @@ class ProudElasticSearch {
   /**
    * Alters es mapping
    */
-  public function ep_config_mapping( $mapping ) {
-    // Adds elastic search attachments
-    return attachments_mapping($mapping);
-  }
-
-  /**
-   * Alters es mapping
-   */
   public function ep_prepare_meta_allowed_protected_keys( $allowed_protected_keys ) {
     // Adding event end timestamp
     $allowed_protected_keys[] = '_end_ts';
@@ -207,6 +195,18 @@ class ProudElasticSearch {
    */
   public function ep_global_alias_full( $alias ) {
     return implode( ',', array_keys( $this->search_cohort ) );
+  }
+
+  /**
+   * See elasticpress/features/documents/documents/
+   * func ep_documents_index_post_request_path
+   */
+  public function ep_document_request_path($id) {
+    static $index = null; 
+    if (!$index) {
+      $index = ep_get_index_name();
+    }
+    return trailingslashit( $index ) . 'post/' . $id . '?pipeline=' . apply_filters( 'ep_documents_pipeline_id', $index . '-attachment' );
   }
 
   /**
@@ -233,7 +233,7 @@ class ProudElasticSearch {
     $args['body']->path = $this->ep_document_request_path( $post_args['ID'] );
     $args['body']->post = $post_args;
 
-    $request = wp_remote_request( EP_HELPER_HOST, $args );
+    $request = wp_remote_request( $this->attachments_api, $args );
   }
 
   /**
@@ -245,7 +245,6 @@ class ProudElasticSearch {
     if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
         return;
     }
-
     // Trying to stop autosave
     if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
         return;
@@ -285,31 +284,6 @@ class ProudElasticSearch {
     // return false;
   }
 
-  /**
-   * See elasticpress/features/documents/documents/
-   * func ep_documents_index_post_request_path
-   */
-  public function ep_document_request_path($id) {
-    static $index = null; 
-    if (!$index) {
-      $index = ep_get_index_name();
-    }
-    return trailingslashit( $index ) . 'post/' . $id . '?pipeline=' . apply_filters( 'ep_documents_pipeline_id', $index . '-attachment' );
-  }
-
-  // /**
-  //  * Change Elasticsearch request path if processing attachment
-  //  *
-  //  * @param string $path
-  //  * @param array $post
-  //  * @since  2.3
-  //  * @return string
-  //  */
-  // public function ep_documents_index_post_request_path( $path, $post ) {
-  //   $this->process_attachments($post);
-  //   return $path;
-  // }
-
   /** 
    * Alters outgoing post sync
    */
@@ -323,21 +297,15 @@ class ProudElasticSearch {
       }
     } 
 
-    // Add attachments to everything
-    $post_args['attachments'] = [];
-    $document = $this->process_attachments($post_args);
-    //Resets the value after posting to helper
-    $post_args['attachments'] = [];
-    return $post_args;
-  }
-
-  /** 
-   * Sends to node processing
-   */
-  public function send_documents_to_processing($post_args, $body) {
-    // if( !empty( self::$attachments_ledger ) ) {
-
-    // }
+    
+    // IF we're processing attachments
+    if ( $this->attachments ) {
+      // Add attachments to everything 
+      $post_args['attachments'] = [];
+      $document = $this->process_attachments($post_args);
+      //Resets the value after posting to helper
+      $post_args['attachments'] = [];
+    }
     return $post_args;
   }
 
@@ -492,8 +460,8 @@ class ProudElasticSearch {
         $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] = 'post_title^2';
       }
 
-      // We're in a content listing 
-      if( empty( $args['proud_teaser_search'] ) && empty( $args['proud_search_ajax'] ) ) {
+      // We're searching attachments + this is a content listing, 
+      if( $this->attachments_api && empty( $args['proud_teaser_search'] ) && empty( $args['proud_search_ajax'] ) ) {
 
         // Get rid of other sorting on content listings if there is a search
         if( empty($formatted_args['sort'][0]['_score']) ) {
@@ -570,19 +538,23 @@ class ProudElasticSearch {
       $formatted_args['query'] = $weight_search;
     }
 
-    // Add highlighting for attachments
-    $formatted_args['highlight'] = [
-      'fields' => [
-        'attachments.attachment.content' => new stdClass,
-        'post_content' => new stdClass,
-      ]
-    ];
+    // We processing attachments?
+    if ($this->attachments_api) {
 
-    // But also don't return the source since we don't want to be transmitting
-    // 3mb of document
-    $formatted_args['_source'] = [
-      'excludes'=> [ 'attachments*data', 'attachments*content' ]
-    ];
+      // Add highlighting for attachments
+      $formatted_args['highlight'] = [
+        'fields' => [
+          'attachments.attachment.content' => new stdClass,
+          'post_content' => new stdClass,
+        ]
+      ];
+
+      // But also don't return the source since we don't want to be transmitting
+      // 3mb of document
+      $formatted_args['_source'] = [
+        'excludes'=> [ 'attachments*data', 'attachments*content' ]
+      ];
+    }
 
     // A make sure sort doesn't break on "field doesn't exist"
     if ( !empty( $formatted_args['sort'] ) ) {
