@@ -36,7 +36,7 @@ class ProudElasticSearch {
     // Alter index names to match our cohort
     add_filter( 'ep_index_name', array( $this, 'ep_index_name' ), 10, 2 );
     // Are we processing attachments?
-    $this->attachments_api = defined( 'EP_HELPER_HOST' ) ? defined( 'EP_HELPER_HOST' ) : false;
+    $this->attachments_api = defined( 'EP_HELPER_HOST' ) ? EP_HELPER_HOST : false;
 
     // Deal with elastic mapping
     // -----------------------------------
@@ -295,11 +295,10 @@ class ProudElasticSearch {
       if( $post && isset( $post->post_content ) ) {
         $post_args['post_content'] = $post->post_content;
       }
-    } 
-
+    }
     
     // IF we're processing attachments
-    if ( $this->attachments ) {
+    if ( $this->attachments_api ) {
       // Add attachments to everything 
       $post_args['attachments'] = [];
       $document = $this->process_attachments($post_args);
