@@ -7,7 +7,7 @@ if ( ! defined( 'ABSPATH' ) ) {
   exit; // Exit if accessed directly.
 }
 
-define( 'ATTACHMENT_MAX', 10 );
+define( 'ATTACHMENT_MAX', 25 );
 
 class ProudElasticSearch {
 
