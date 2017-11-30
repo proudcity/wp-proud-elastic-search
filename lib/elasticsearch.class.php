@@ -45,7 +45,7 @@ class ProudElasticSearch {
     if ( $this->attachments_api ) {
       add_action( 'ep_cli_put_mapping', 'ep_documents_create_pipeline' );
       add_action( 'ep_dashboard_put_mapping', 'ep_documents_create_pipeline' );
-      add_filter( 'ep_config_mapping', 'attachments_mapping' );
+      add_filter( 'ep_config_mapping', 'ep_documents_attachments_mapping' );
     }
 
     // Allow meta mappings
@@ -250,11 +250,11 @@ class ProudElasticSearch {
         return;
     }
     if( $post_args['post_type'] === 'document' ) {
-      if( !empty( $post_args['post_meta']['document'] ) ) {
-        foreach ( $post_args['post_meta']['document'] as $key => $document ) {
-          if( !empty( $post_args['post_meta']['document_meta'][$key] ) ) {
+      if( !empty( $post_args['meta']['document'] ) ) {
+        foreach ( $post_args['meta']['document'] as $key => $document ) {
+          if( !empty( $document['value'] ) && !empty( $post_args['meta']['document_meta'][$key]['value'] ) ) {
             try {
-              $meta = json_decode( $post_args['post_meta']['document_meta'][$key] );
+              $meta = json_decode( $post_args['meta']['document_meta'][$key]['value'] );
               $has_meta = !empty( $meta ) 
                        && !empty( $meta->size )
                        && !empty( $meta->mime )
@@ -269,7 +269,7 @@ class ProudElasticSearch {
                           && (int) preg_replace( '/[^0-9]/', '', $meta->size ) < ATTACHMENT_MAX;
               // Send request to processing
               if ( $is_small_mb || strripos($meta->size, 'kb' ) ) {
-                $post_args['attachments'][] = $document;
+                $post_args['attachments'][] = $document['value'];
               }
             } catch (Exception $e) {
               print_r($e);
@@ -632,8 +632,6 @@ class ProudElasticSearch {
    * Modify teaser settings to allow certain index to be searched
    */
   public function proud_teaser_extra_options( $options, $instance ) {
-    // d($instance);
-    // exit();
     if( !empty( $instance['elastic_index'] ) ) {
       $options['elastic_index'] = $instance['elastic_index'];
     }
