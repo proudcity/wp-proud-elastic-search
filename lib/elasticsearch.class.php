@@ -320,13 +320,14 @@ class ProudElasticSearch {
 		if ( $this->attachments_api ) {
 
 			$post_args['attachments'] = [];
-			$did_post = $this->process_attachments( $post_args );
-			$post_args['attachments'] = [];
 
-			// @TODO fix this so we're not overwriting everytime
-//			if ( $post_args['post_type'] === 'document' ) {
-//				$did_post = $this->process_attachments( $post_args );
-//
+
+			if ( $post_args['post_type'] === 'document' ) {
+
+				$did_post = $this->process_attachments( $post_args );
+				$post_args['attachments'] = [];
+
+				// @TODO fix this so we're not overwriting everytime
 //				if( $did_post ) {
 //					// Posting to API, so unset this so it doesn't get overwritten
 //					unset( $post_args['attachments'] );
@@ -334,10 +335,7 @@ class ProudElasticSearch {
 //					// Not suitable for indexing, set to blank
 //					$post_args['attachments'] = [];
 //				}
-//			} else {
-//				// Add attachments to everything else
-//				$post_args['attachments'] = [];
-//			}
+			}
 		}
 
 		return $post_args;
