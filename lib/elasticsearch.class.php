@@ -36,6 +36,8 @@ class ProudElasticSearch {
 		$this->agent_type = get_option( 'proud-elastic-agent-type', 'agent' );
 		// Alter index names to match our cohort
 		add_filter( 'ep_index_name', array( $this, 'ep_index_name' ), 10, 2 );
+		// Alter shard count
+		add_filter('ep_default_index_number_of_shards', array($this, 'ep_default_index_number_of_shards'));
 		// Are we processing attachments?
 		$this->attachments_api = defined( 'EP_HELPER_HOST' ) ? EP_HELPER_HOST : false;
 
@@ -178,6 +180,13 @@ class ProudElasticSearch {
 	}
 
 	/**
+	 * Alters number of shards
+	 */
+	public function ep_default_index_number_of_shards() {
+		return 2;
+	}
+
+	/**
 	 * Alters es mapping
 	 */
 	public function ep_prepare_meta_allowed_protected_keys( $allowed_protected_keys ) {
@@ -250,45 +259,48 @@ class ProudElasticSearch {
 	public function process_attachments( $post_args ) {
 		// Trying to stop autosave
 		if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
-			return;
+			return null;
 		}
 		// Trying to stop autosave
 		if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
-			return;
+			return null;
 		}
-		if ( $post_args['post_type'] === 'document' ) {
-			if ( ! empty( $post_args['meta']['document'] ) ) {
-				foreach ( $post_args['meta']['document'] as $key => $document ) {
-					if ( ! empty( $document['value'] ) && ! empty( $post_args['meta']['document_meta'][ $key ]['value'] ) ) {
-						try {
-							$meta     = json_decode( $post_args['meta']['document_meta'][ $key ]['value'] );
-							$has_meta = ! empty( $meta )
-							            && ! empty( $meta->size )
-							            && ! empty( $meta->mime )
-							            && in_array( $meta->mime, ep_documents_get_allowed_ingest_mime_types() );
 
-							if ( ! $has_meta ) {
-								return false;
-							}
+		if ( ! empty( $post_args['meta']['document'] ) ) {
+			foreach ( $post_args['meta']['document'] as $key => $document ) {
+				if ( ! empty( $document['value'] ) && ! empty( $post_args['meta']['document_meta'][ $key ]['value'] ) ) {
+					try {
+						$meta     = json_decode( $post_args['meta']['document_meta'][ $key ]['value'] );
+						$has_meta = ! empty( $meta )
+						            && ! empty( $meta->size )
+						            && ! empty( $meta->mime )
+						            && in_array( $meta->mime, ep_documents_get_allowed_ingest_mime_types() );
 
-							// Check size for transmission limit
-							$is_small_mb = strripos( $meta->size, 'mb' )
-							               && (int) preg_replace( '/[^0-9]/', '', $meta->size ) < ATTACHMENT_MAX;
-							// Send request to processing
-							if ( $is_small_mb || strripos( $meta->size, 'kb' ) ) {
-								$post_args['attachments'][] = $document['value'];
-							}
-						} catch ( Exception $e ) {
-							print_r( $e );
+						if ( ! $has_meta ) {
+							continue;
 						}
+
+						// Check size for transmission limit
+						$is_small_mb = strripos( $meta->size, 'mb' )
+						               && (int) preg_replace( '/[^0-9]/', '', $meta->size ) < ATTACHMENT_MAX;
+						// Send request to processing
+						if ( $is_small_mb || strripos( $meta->size, 'kb' ) ) {
+							$post_args['attachments'][] = $document['value'];
+						}
+					} catch ( Exception $e ) {
+						print_r( $e );
 					}
 				}
-				if ( ! empty( $post_args['attachments'] ) ) {
-					$this->post_to_helper_api( $post_args );
-				}
+			}
+			if ( !empty( $post_args['attachments'] ) ) {
+				$this->post_to_helper_api( $post_args );
+
+				return true;
 			}
 		}
-		// return false;
+
+		// Not suitable for indexing
+		return false;
 	}
 
 	/**
@@ -306,11 +318,26 @@ class ProudElasticSearch {
 
 		// IF we're processing attachments
 		if ( $this->attachments_api ) {
-			// Add attachments to everything
+
 			$post_args['attachments'] = [];
-			$document                 = $this->process_attachments( $post_args );
-			//Resets the value after posting to helper
+			$did_post = $this->process_attachments( $post_args );
 			$post_args['attachments'] = [];
+
+			// @TODO fix this so we're not overwriting everytime
+//			if ( $post_args['post_type'] === 'document' ) {
+//				$did_post = $this->process_attachments( $post_args );
+//
+//				if( $did_post ) {
+//					// Posting to API, so unset this so it doesn't get overwritten
+//					unset( $post_args['attachments'] );
+//				} else if ( $did_post === false ) {
+//					// Not suitable for indexing, set to blank
+//					$post_args['attachments'] = [];
+//				}
+//			} else {
+//				// Add attachments to everything else
+//				$post_args['attachments'] = [];
+//			}
 		}
 
 		return $post_args;
@@ -665,6 +692,7 @@ class ProudElasticSearch {
 	 *
 	 * @param array $filters
 	 * @param array $config [ 'type' => post_type, 'options' => extra_options ]
+	 * @return array
 	 */
 	public function proud_teaser_filters( $filters, $config ) {
 		if ( 'full' === $this->agent_type ) {
