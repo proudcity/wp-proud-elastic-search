@@ -900,6 +900,7 @@ class ProudElasticSearch {
 		if ( empty( $post->search_highlight ) ) {
 			return;
 		}
+		$allowable_tags = '<span><em>';
 		include( plugin_dir_path( __FILE__ ) . '../templates/teaser-search-matching.php' );
 	}
 
