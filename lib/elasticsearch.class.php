@@ -439,12 +439,16 @@ class ProudElasticSearch {
 						// Add to our form alters
 						$this->forms[] = $config['form_id_base'];
 						// Should we modify taxonomy query?
+
 						if ( ! empty( $config['form_instance']['filter_categories'] ) ) {
 							$query_args['tax_query'] = [
 								[
 									'taxonomy' => $config['taxonomy'],
 									'field'    => 'name',
-									'terms'    => $config['form_instance']['filter_categories'],
+									// convert & -> &amp; as that's how its being stored in elastic
+									'terms'    => array_map(function($val) {
+										return htmlentities($val);
+									}, $config['form_instance']['filter_categories']),
 									'operator' => 'IN',
 								]
 							];
@@ -737,7 +741,9 @@ class ProudElasticSearch {
 				if ( ! empty( self::$aggregations['terms_aggregation']['categories']['buckets'] ) ) {
 					$options = [];
 					foreach ( self::$aggregations['terms_aggregation']['categories']['buckets'] as $key => $term ) {
-						$options[ $term['key'] ] = $term['key'] . ' (' . $term['doc_count'] . ')';
+						// convert &amp; -> &
+						$key = html_entity_decode($term['key']);
+						$options[ $key ] = $key . ' (' . $term['doc_count'] . ')';
 					}
 					$fields['filter_categories']['#options'] = $options;
 				} // Alter tax to use Name
