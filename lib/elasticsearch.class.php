@@ -447,7 +447,7 @@ class ProudElasticSearch {
 									'field'    => 'name',
 									// convert & -> &amp; as that's how its being stored in elastic
 									'terms'    => array_map(function($val) {
-										return htmlentities($val);
+										return stripcslashes(htmlentities($val));
 									}, $config['form_instance']['filter_categories']),
 									'operator' => 'IN',
 								]
@@ -742,7 +742,7 @@ class ProudElasticSearch {
 					$options = [];
 					foreach ( self::$aggregations['terms_aggregation']['categories']['buckets'] as $key => $term ) {
 						// convert &amp; -> &
-						$key = html_entity_decode($term['key']);
+						$key = stripcslashes(html_entity_decode($term['key']));
 						$options[ $key ] = $key . ' (' . $term['doc_count'] . ')';
 					}
 					$fields['filter_categories']['#options'] = $options;
