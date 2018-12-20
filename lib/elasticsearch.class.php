@@ -293,7 +293,7 @@ class ProudElasticSearch {
 				}
 			}
 			if ( !empty( $post_args['attachments'] ) ) {
-				$this->post_to_helper_api( $post_args );
+//				$this->post_to_helper_api( $post_args );
 
 				return true;
 			}
