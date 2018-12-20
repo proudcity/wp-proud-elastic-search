@@ -15,7 +15,16 @@ class ProudElasticSearch {
 	public $search_cohort; // array of sites that elastic search is using
 	public $index_name; // the index name of this site
 	public $agent_type; // mode we're operating in
-	public $attachments;
+	// Tracking post types and meta fields that have document indexing
+	public $attachments = [
+		'document' => [
+			'document',
+		],
+		'meeting' => [
+			'agenda_attachment',
+			'minutes_attachment',
+		],
+	];
 	public $forms = []; // The forms we should alter with aggregations, ect
 	public static $aggregations; // Result counts
 
@@ -76,6 +85,8 @@ class ProudElasticSearch {
 			$this,
 			'ep_post_sync_args_post_prepare_meta'
 		), 999, 1 );
+
+		add_action( 'ep_after_index_post', array( $this, 'ep_after_index_post' ), 999, 2 );
 
 		// If we're only in agent mode, don't load proud
 		if ( $this->agent_type === 'agent' ) {
@@ -170,13 +181,6 @@ class ProudElasticSearch {
 	}
 
 	/**
-	 * Gets which mode elastic should be operating in
-	 */
-	public static function get_agent_type() {
-		return $this->agent_type;
-	}
-
-	/**
 	 * Alters index name to our set value
 	 */
 	public function ep_index_name( $index_name, $blog_id ) {
@@ -225,30 +229,38 @@ class ProudElasticSearch {
 	 */
 	public function em_save_events( $post_id, $post, $update ) {
 
-		if ( $post->post_type === 'event-recurring' && $post->post_status !== 'auto-draft' ) {
-			// If this is a revision, don't bother
-			if ( wp_is_post_revision( $post_id ) )
-				return;
+        if ( $post->post_type === 'event-recurring' && $post->post_status !== 'auto-draft' ) {
+            // If this is a revision, don't bother
+            if ( wp_is_post_revision( $post_id ) ) {
+                return;
+            }
 
-			$recurring = new EM_EVENT($post);
-			$events_array = EM_Events::get( [
-				'recurrence_id'=> $recurring->event_id,
-				'scope'=>'all',
-				'status'=>'everything'
-			] );
+            $recurring    = new EM_EVENT( $post );
+            $events_array = EM_Events::get( [
+                'recurrence_id' => $recurring->event_id,
+                'scope'         => 'all',
+                'status'        => 'everything'
+            ] );
 
-			if ( empty( $events_array ) ) {
-				return;
-			}
+            if ( empty( $events_array ) ) {
+                return;
+            }
 
-			$syncManager = new EP_Sync_Manager();
-			foreach( $events_array as $event ){
-				if ( $recurring->event_id != $event->recurrence_id ) {
-					continue;
-				}
-				$syncManager->sync_post( $event->post_id );
-			}
-		}
+            $syncManager = new EP_Sync_Manager();
+            foreach ( $events_array as $event ) {
+                if ( $recurring->event_id != $event->recurrence_id ) {
+                    continue;
+                }
+                $syncManager->sync_post( $event->post_id );
+            }
+        }
+    }
+
+    /*
+	 * Gets the path suffix for a post in elastic
+	 */
+	public function indexed_post_path( $id ) {
+		return trailingslashit( $this->index_name ) . 'post/' . $id;
 	}
 
 	/**
@@ -256,12 +268,8 @@ class ProudElasticSearch {
 	 * func ep_documents_index_post_request_path
 	 */
 	public function ep_document_request_path( $id ) {
-		static $index = null;
-		if ( ! $index ) {
-			$index = ep_get_index_name();
-		}
-
-		return trailingslashit( $index ) . 'post/' . $id . '?pipeline=' . apply_filters( 'ep_documents_pipeline_id', $index . '-attachment' );
+		return $this->indexed_post_path( $id ) . '?pipeline='
+		       . apply_filters( 'ep_documents_pipeline_id', $this->index_name . '-attachment' );
 	}
 
 	/**
@@ -285,17 +293,18 @@ class ProudElasticSearch {
 			'body'    => new stdClass,
 		];
 
+		$args['body']->indexedPath = $this->indexed_post_path( $post_args['ID'] );
 		$args['body']->path = $this->ep_document_request_path( $post_args['ID'] );
 		$args['body']->post = $post_args;
 
-		$request = wp_remote_request( $this->attachments_api, $args );
+		wp_remote_request( $this->attachments_api, $args );
 	}
 
 	/**
 	 * Should we process attachments
 	 * @returns the document if so
 	 */
-	public function process_attachments( $post_args ) {
+	public function process_attachments( &$post_args, $fields ) {
 		// Trying to stop autosave
 		if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
 			return null;
@@ -305,36 +314,44 @@ class ProudElasticSearch {
 			return null;
 		}
 
-		if ( ! empty( $post_args['meta']['document'] ) ) {
-			foreach ( $post_args['meta']['document'] as $key => $document ) {
-				if ( ! empty( $document['value'] ) && ! empty( $post_args['meta']['document_meta'][ $key ]['value'] ) ) {
-					try {
-						$meta     = json_decode( $post_args['meta']['document_meta'][ $key ]['value'] );
-						$has_meta = ! empty( $meta )
-						            && ! empty( $meta->size )
-						            && ! empty( $meta->mime )
-						            && in_array( $meta->mime, ep_documents_get_allowed_ingest_mime_types() );
+		$post_args['attachments'] = [];
 
-						if ( ! $has_meta ) {
-							continue;
-						}
+		foreach( $fields as $attachment_field ) {
+			if ( ! empty( $post_args['meta'][$attachment_field] ) ) {
+				foreach ( $post_args['meta'][$attachment_field] as $key => $document ) {
+					if ( ! empty( $document['value'] ) && ! empty( $post_args['meta']['document_meta'][ $key ]['value'] ) ) {
+						try {
+							$meta     = json_decode( $post_args['meta']['document_meta'][ $key ]['value'] );
+							$has_meta = ! empty( $meta )
+							            && ! empty( $meta->size )
+							            && ! empty( $meta->mime )
+							            && in_array( $meta->mime, ep_documents_get_allowed_ingest_mime_types() );
 
-						// Check size for transmission limit
-						$is_small_mb = strripos( $meta->size, 'mb' )
-						               && (int) preg_replace( '/[^0-9]/', '', $meta->size ) < ATTACHMENT_MAX;
-						// Send request to processing
-						if ( $is_small_mb || strripos( $meta->size, 'kb' ) ) {
-							$post_args['attachments'][] = $document['value'];
+							if ( ! $has_meta ) {
+								continue;
+							}
+
+							// Check size for transmission limit
+							$is_small_mb = strripos( $meta->size, 'mb' )
+							               && (int) preg_replace( '/[^0-9]/', '', $meta->size ) < ATTACHMENT_MAX;
+							// Send request to processing
+							if ( $is_small_mb || strripos( $meta->size, 'kb' ) ) {
+								$post_args['attachments'][] = $document['value'];
+							}
+						} catch ( Exception $e ) {
+							print_r( $e );
 						}
-					} catch ( Exception $e ) {
-						print_r( $e );
 					}
 				}
-			}
-			if ( !empty( $post_args['attachments'] ) ) {
-//				$this->post_to_helper_api( $post_args );
 
-				return true;
+				if ( ! empty( $post_args['attachments'] ) ) {
+					$this->post_to_helper_api( $post_args );
+
+					// Don't overwrite whats already in there
+					unset( $post_args['attachments'] );
+
+					return true;
+				}
 			}
 		}
 
@@ -346,6 +363,18 @@ class ProudElasticSearch {
 	 * Alters outgoing post sync
 	 */
 	public function ep_post_sync_args_post_prepare_meta( $post_args ) {
+//		var_dump($post_args);
+
+//		$id = (int) $post_args['meta']['agenda_attachment'][0]['value'];
+//		$attachment = get_post($id );
+//		$attachment_meta = get_post_meta( $id, $key = '', false );
+//		var_dump(unserialize($attachment_meta['sm_cloud'][0]));
+//		exit;
+
+//		var_dump($post_args['meta']['agenda_attachment'][0]['value']);
+//		var_dump(wp_prepare_attachment_for_js((int) $post_args['meta']['agenda_attachment'][0]['value']));
+//		var_dump(wp_get_attachment_metadata( (int) $post_args['meta']['agenda_attachment'][0]['value'] ));
+
 		// Events are returning un-desireable results due to html
 		// we get weird full html markup in results
 		if ( $post_args['post_type'] === 'event' ) {
@@ -357,27 +386,33 @@ class ProudElasticSearch {
 
 		// IF we're processing attachments
 		if ( $this->attachments_api ) {
-
-			$post_args['attachments'] = [];
-
-
-			if ( $post_args['post_type'] === 'document' ) {
-
-				$did_post = $this->process_attachments( $post_args );
+			if ( !empty( $this->attachments[$post_args['post_type']] ) ) {
+				// post_type has entry in $attachments, so handle
+				$this->process_attachments( $post_args, $this->attachments[$post_args['post_type']] );
+			} else {
 				$post_args['attachments'] = [];
-
-				// @TODO fix this so we're not overwriting everytime
-//				if( $did_post ) {
-//					// Posting to API, so unset this so it doesn't get overwritten
-//					unset( $post_args['attachments'] );
-//				} else if ( $did_post === false ) {
-//					// Not suitable for indexing, set to blank
-//					$post_args['attachments'] = [];
-//				}
 			}
 		}
 
+//		exit;
+
 		return $post_args;
+	}
+
+	/**
+	 * After post goes out, maybe send docs
+	 */
+	public function ep_after_index_post( $post_args, $return ) {
+
+//		var_dump($post_args);
+//		exit;
+		// IF we're processing attachments
+		if ( $this->attachments_api && $post_args['post_type'] === 'document' ) {
+//			echo "yesss222";
+//			var_dump($post_args);
+//			exit;
+//			$this->process_attachments( $post_args );
+		}
 	}
 
 
