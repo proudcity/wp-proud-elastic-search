@@ -8,7 +8,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'ATTACHMENT_MAX', 25 );
-define( 'EVENT_DATE_FIELD', '_event_end_date');
+define( 'EVENT_DATE_FIELD', '_event_end');
 
 class ProudElasticSearch {
 
@@ -64,6 +64,10 @@ class ProudElasticSearch {
 		else {
 			add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_single' ) );
 		}
+
+		// Events-manager stub
+		// -----------------------------------
+		add_action( 'wp_insert_post', array( $this, 'em_save_events' ), 999, 3 );
 
 		// Posting to elastic
 		// -----------------------------------
@@ -210,6 +214,41 @@ class ProudElasticSearch {
 	 */
 	public function ep_global_alias_full( $alias ) {
 		return implode( ',', array_keys( $this->search_cohort ) );
+	}
+
+	/**
+	 * Deal with events-manager not saving the events in a recurring set
+	 *
+	 * @param $post_ID
+	 * @param $post
+	 * @param $update
+	 */
+	public function em_save_events( $post_id, $post, $update ) {
+
+		if ( $post->post_type === 'event-recurring' && $post->post_status !== 'auto-draft' ) {
+			// If this is a revision, don't bother
+			if ( wp_is_post_revision( $post_id ) )
+				return;
+
+			$recurring = new EM_EVENT($post);
+			$events_array = EM_Events::get( [
+				'recurrence_id'=> $recurring->event_id,
+				'scope'=>'all',
+				'status'=>'everything'
+			] );
+
+			if ( empty( $events_array ) ) {
+				return;
+			}
+
+			$syncManager = new EP_Sync_Manager();
+			foreach( $events_array as $event ){
+				if ( $recurring->event_id != $event->recurrence_id ) {
+					continue;
+				}
+				$syncManager->sync_post( $event->post_id );
+			}
+		}
 	}
 
 	/**
@@ -429,7 +468,7 @@ class ProudElasticSearch {
 				else {
 					// We're an event date field, alter the ordering
 					if ( !empty( $query_args['meta_key'] ) && $query_args['meta_key'] === EVENT_DATE_FIELD ) {
-						$query_args['orderby'] = 'meta.' . EVENT_DATE_FIELD . '.date';
+						$query_args['orderby'] = 'meta.' . EVENT_DATE_FIELD . '.datetime';
 					}
 
 					// Alter category listings?
@@ -572,7 +611,7 @@ class ProudElasticSearch {
 				// Add some weighting for menu_order
 				$weight_search['function_score']['functions'][] = [
 					'gauss' => [
-						'meta._event_end_date.date' => [
+						'meta.' . EVENT_DATE_FIELD . '.date' => [
 							'scale'  => '10d',
 							'offset' => '5d',
 							'decay'  => 0.5
@@ -661,7 +700,9 @@ class ProudElasticSearch {
 			return $settings;
 		}
 		if ( $post_type === 'document' || $post_type === 'post' || $post_type === 'event' ) {
-			$options = array_map( create_function( '$o', 'return $o["name"];' ), $this->search_cohort );
+			$options = array_map( function( $o ) {
+				return $o["name"];
+			}, $this->search_cohort );
 			// @TODO make the integration automatic for single site installs
 			// Mod index name
 			$options[ $this->index_name ] = __( 'This site only', 'wp-proud-search-elastic' );
@@ -705,7 +746,9 @@ class ProudElasticSearch {
 					'all' => __( 'All Sites', 'wp-proud-search-elastic' )
 				];
 				// Add in our cohort
-				$options = $options + array_map( create_function( '$o', 'return $o["name"];' ), $this->search_cohort );
+				$options = $options + array_map( function ( $o ){
+					return $o["name"];
+				}, $this->search_cohort );
 				$index   = [
 					'filter_index' => [
 						'#title'         => __( 'Search Site', 'proud-teaser' ),
