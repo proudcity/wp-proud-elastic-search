@@ -8,7 +8,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'ATTACHMENT_MAX', 25 );
-define( 'EVENT_DATE_FIELD', '_event_end');
+define( 'EVENT_DATE_FIELD', '_event_start_local');
 
 class ProudElasticSearch {
 
