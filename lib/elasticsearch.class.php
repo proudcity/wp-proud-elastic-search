@@ -15,6 +15,7 @@ class ProudElasticSearch {
 	public $search_cohort; // array of sites that elastic search is using
 	public $index_name; // the index name of this site
 	public $agent_type; // mode we're operating in
+    public $force_attachments = false; // Flag for CLI to force attachments to be posted initially
 	// Tracking post types and meta fields that have document indexing
 	public $attachments = [
 		'document' => [
@@ -85,8 +86,6 @@ class ProudElasticSearch {
 			$this,
 			'ep_post_sync_args_post_prepare_meta'
 		), 999, 1 );
-
-		add_action( 'ep_after_index_post', array( $this, 'ep_after_index_post' ), 999, 2 );
 
 		// If we're only in agent mode, don't load proud
 		if ( $this->agent_type === 'agent' ) {
@@ -256,7 +255,7 @@ class ProudElasticSearch {
         }
     }
 
-    /*
+    /**
 	 * Gets the path suffix for a post in elastic
 	 */
 	public function indexed_post_path( $id ) {
@@ -272,10 +271,13 @@ class ProudElasticSearch {
 		       . apply_filters( 'ep_documents_pipeline_id', $this->index_name . '-attachment' );
 	}
 
-	/**
-	 * Posts to helper api
-	 */
-	public function post_to_helper_api( $post_args ) {
+    /**
+     * Posts to helper api
+     *
+     * @param $post_args
+     * @param $attachments_meta
+     */
+	public function post_to_helper_api( $post_args, $attachments_meta ) {
 		// For some reason the live version is trying to send this request
 		// multiple times in a row...
 		// @TODO figure out why
@@ -295,65 +297,161 @@ class ProudElasticSearch {
 
 		$args['body']->indexedPath = $this->indexed_post_path( $post_args['ID'] );
 		$args['body']->path = $this->ep_document_request_path( $post_args['ID'] );
+        $args['body']->attachments_meta = $attachments_meta;
 		$args['body']->post = $post_args;
 
 		wp_remote_request( $this->attachments_api, $args );
 	}
 
-	/**
-	 * Should we process attachments
-	 * @returns the document if so
-	 */
+    /**
+     * Check if the meta values are still being sent
+     *
+     * @param $post_args
+     * @param $fields
+     *
+     * @return bool
+     */
+	public function attachment_meta_still_posting($post_args, $fields) {
+        $still_posting_meta = false;
+
+        foreach( $fields as $attachment_field ) {
+            $posting_field      = isset( $post_args['meta'][ $attachment_field ][0]['value'] )
+                                  && $post_args['meta'][ $attachment_field ][0]['value'] === null;
+            $still_posting_meta = $still_posting_meta || $posting_field;
+
+            $field_meta_key     = $attachment_field . '_meta';
+            $posting_meta       = isset( $post_args['meta'][ $field_meta_key ][0]['value'] )
+                                  && $post_args['meta'][ $field_meta_key ][0]['value'] === null;
+            $still_posting_meta = $still_posting_meta || $posting_meta;
+        }
+
+        return $still_posting_meta;
+    }
+
+    /**
+     * Get the attachment meta array
+     *
+     * @param $post_args
+     * @param $attachment_field
+     *
+     * @return array
+     */
+	public function get_attachment_meta($post_args, $attachment_field) {
+	    // Missing attachment value
+	    if ( empty( $post_args['meta'][$attachment_field][0]['value'] ) ) {
+            return [];
+        }
+
+	    $field_meta_key = $attachment_field . '_meta';
+
+	    if (empty($post_args['meta'][$field_meta_key][0]['value'])) {
+	        // @TODO load these from fid?
+            var_dump('get_attachment_meta(): no meta');
+	        return [];
+        }
+
+	    // Decode meta field
+	    try {
+            $meta = json_decode( $post_args['meta'][$field_meta_key][0]['value'], true );
+        } catch (\Exception $e) {
+	       error_log($e);
+	       return [];
+        }
+
+        // Legacy meta fields missing info
+        if (empty($meta['url'])) {
+            if ($post_args['post_type'] === 'document') {
+                // Use document url
+                $meta['url'] = $post_args['meta'][$attachment_field][0]['value'];
+            } else {
+                // @TODO anything?
+                var_dump('get_attachment_meta(): no url');
+                return [];
+            }
+        }
+
+        return $meta;
+    }
+
+    /**
+     * Ensure data is all set
+     *
+     * @param $meta
+     *
+     * @return bool
+     */
+    public function attachment_meta_suitable( $meta ) {
+        // Don't have suitable data
+	    if ( empty( $meta['mime'] ) || empty( $meta['size'] ) ) {
+            return false;
+        }
+
+	    // Don't index
+	    if ( ! in_array( $meta['mime'], ep_documents_get_allowed_ingest_mime_types() ) ) {
+	        return false;
+        }
+
+	    // Legacy document meta, process
+        if ( empty( $meta['size_bytes'] ) ) {
+
+            // Check size for transmission limit
+            $is_small_mb = strripos( $meta['size'], 'mb' )
+                           && (int) preg_replace( '/[^0-9]/', '', $meta['size'] ) < ATTACHMENT_MAX;
+            if ( $is_small_mb || strripos( $meta['size'], 'kb' ) || strripos( $meta['size'], ' b' ) ) {
+                return true;
+            }
+
+            return false;
+        }
+
+        return (int) $meta['size_bytes'] < ATTACHMENT_MAX * 1000000;
+    }
+
+    /**
+     * Try to process attachments
+     *
+     * @param $post_args
+     * @param $fields
+     *
+     * @return bool
+     */
 	public function process_attachments( &$post_args, $fields ) {
 		// Trying to stop autosave
 		if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
-			return null;
+			return false;
 		}
 		// Trying to stop autosave
 		if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
-			return null;
+			return false;
 		}
+		// Meta values still posting (new documents seem to have multiple post points)
+        if ($this->attachment_meta_still_posting($post_args, $fields)) {
+            var_dump('process_attachments(): still posting some fields');
+            return false;
+        }
 
-		$post_args['attachments'] = [];
+        $post_args['attachments'] = [];
+		$attachments_meta = [];
 
 		foreach( $fields as $attachment_field ) {
-			if ( ! empty( $post_args['meta'][$attachment_field] ) ) {
-				foreach ( $post_args['meta'][$attachment_field] as $key => $document ) {
-					if ( ! empty( $document['value'] ) && ! empty( $post_args['meta']['document_meta'][ $key ]['value'] ) ) {
-						try {
-							$meta     = json_decode( $post_args['meta']['document_meta'][ $key ]['value'] );
-							$has_meta = ! empty( $meta )
-							            && ! empty( $meta->size )
-							            && ! empty( $meta->mime )
-							            && in_array( $meta->mime, ep_documents_get_allowed_ingest_mime_types() );
+		    $meta = $this->get_attachment_meta($post_args, $attachment_field);
 
-							if ( ! $has_meta ) {
-								continue;
-							}
+		    if ( ! $this->attachment_meta_suitable( $meta ) ) {
+                continue;
+            }
 
-							// Check size for transmission limit
-							$is_small_mb = strripos( $meta->size, 'mb' )
-							               && (int) preg_replace( '/[^0-9]/', '', $meta->size ) < ATTACHMENT_MAX;
-							// Send request to processing
-							if ( $is_small_mb || strripos( $meta->size, 'kb' ) ) {
-								$post_args['attachments'][] = $document['value'];
-							}
-						} catch ( Exception $e ) {
-							print_r( $e );
-						}
-					}
-				}
-
-				if ( ! empty( $post_args['attachments'] ) ) {
-					$this->post_to_helper_api( $post_args );
-
-					// Don't overwrite whats already in there
-					unset( $post_args['attachments'] );
-
-					return true;
-				}
-			}
+            $post_args['attachments'][] = $meta['url'];
+            $attachments_meta[] = $meta;
 		}
+
+        if ( ! empty( $post_args['attachments'] ) ) {
+            $this->post_to_helper_api( $post_args, $attachments_meta );
+
+            // Don't overwrite whats already in there
+            unset( $post_args['attachments'] );
+
+            return true;
+        }
 
 		// Not suitable for indexing
 		return false;
@@ -363,19 +461,7 @@ class ProudElasticSearch {
 	 * Alters outgoing post sync
 	 */
 	public function ep_post_sync_args_post_prepare_meta( $post_args ) {
-//		var_dump($post_args);
-
-//		$id = (int) $post_args['meta']['agenda_attachment'][0]['value'];
-//		$attachment = get_post($id );
-//		$attachment_meta = get_post_meta( $id, $key = '', false );
-//		var_dump(unserialize($attachment_meta['sm_cloud'][0]));
-//		exit;
-
-//		var_dump($post_args['meta']['agenda_attachment'][0]['value']);
-//		var_dump(wp_prepare_attachment_for_js((int) $post_args['meta']['agenda_attachment'][0]['value']));
-//		var_dump(wp_get_attachment_metadata( (int) $post_args['meta']['agenda_attachment'][0]['value'] ));
-
-		// Events are returning un-desireable results due to html
+        // Events are returning un-desireable results due to html
 		// we get weird full html markup in results
 		if ( $post_args['post_type'] === 'event' ) {
 			$post = get_post( $post_args['ID'] );
@@ -389,30 +475,18 @@ class ProudElasticSearch {
 			if ( !empty( $this->attachments[$post_args['post_type']] ) ) {
 				// post_type has entry in $attachments, so handle
 				$this->process_attachments( $post_args, $this->attachments[$post_args['post_type']] );
+
+				// Allow CLI to put_mapping, index everything and have search still work
+				if ($this->force_attachments) {
+                    $post_args['attachments'] = [];
+                }
 			} else {
+                // Make sure non-attachment items get a blank entry
 				$post_args['attachments'] = [];
 			}
 		}
 
-//		exit;
-
 		return $post_args;
-	}
-
-	/**
-	 * After post goes out, maybe send docs
-	 */
-	public function ep_after_index_post( $post_args, $return ) {
-
-//		var_dump($post_args);
-//		exit;
-		// IF we're processing attachments
-		if ( $this->attachments_api && $post_args['post_type'] === 'document' ) {
-//			echo "yesss222";
-//			var_dump($post_args);
-//			exit;
-//			$this->process_attachments( $post_args );
-		}
 	}
 
 
@@ -691,7 +765,7 @@ class ProudElasticSearch {
 
 		// Boost values for local results
 		$formatted_args['indices_boost'] = [
-			$this->index_name => 1.1
+			[ $this->index_name => 1.1 ]
 		];
 
 		return $formatted_args;
@@ -734,7 +808,7 @@ class ProudElasticSearch {
 		if ( ! $post_type ) {
 			return $settings;
 		}
-		if ( $post_type === 'document' || $post_type === 'post' || $post_type === 'event' ) {
+		if ( ! empty( $this->attachments[$post_type] ) || $post_type === 'post' || $post_type === 'event' ) {
 			$options = array_map( function( $o ) {
 				return $o["name"];
 			}, $this->search_cohort );

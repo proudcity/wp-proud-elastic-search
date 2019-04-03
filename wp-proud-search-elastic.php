@@ -16,6 +16,13 @@ if ( class_exists( 'EP_Config' ) ) {
   require_once( plugin_dir_path(__FILE__) . 'lib/elasticsearch.class.php' );
 }
 
+/**
+ * WP CLI Commands
+ */
+if ( defined( 'WP_CLI' ) && WP_CLI ) {
+    require_once(  plugin_dir_path(__FILE__) . 'bin/wp-cli.php' );
+}
+
 // Settings page
 if( is_admin() ) {
   if( class_exists( 'ProudSettingsPage' ) ) {
