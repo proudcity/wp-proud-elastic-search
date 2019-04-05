@@ -21,7 +21,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
         $instance = ProudElasticSearch::factory();
 
         $options = array(
-            'launch'     => true,  // Reuse the current process.
+            'launch'     => false,  // Reuse the current process.
         );
 
         // Just run normal
@@ -30,7 +30,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
 
             sleep ( 1 );
 
-            WP_CLI::runcommand('elasticpress index' );
+            WP_CLI::runcommand( 'elasticpress index' );
 
             return;
         }
@@ -81,7 +81,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
         $instance->force_attachments = true;
 
         $options = array(
-            'launch'     => true,  // Reuse the current process.
+            'launch'     => false,  // Reuse the current process.
         );
 
         $cmd = 'elasticpress put-mapping';
