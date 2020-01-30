@@ -742,7 +742,15 @@ class ProudElasticSearch {
                            && 'post_title' === $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0];
 
             if ( $boost_title ) {
-                $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] = 'post_title^2';
+                $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] = 'post_title^3';
+
+                // We processing attachments?
+                if ( $this->attachments_api ) {
+                    // Drop importance of attachements a bit
+                    if ($formatted_args['query']['bool']['should'][0]['multi_match']['fields'][3] === 'attachments.attachment.content') {
+                        $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][3] = 'attachments.attachment.content^0.75';
+                    }
+                }
             }
 
             // We're searching attachments + this is a content listing,
@@ -776,7 +784,8 @@ class ProudElasticSearch {
                 'linear' => [
                     'menu_order' => [
                         'origin' => 0,
-                        'scale'  => 100,
+                        'scale'  => 1000,
+                        'decay'  => 0.8,
                     ]
                 ]
             ];
@@ -1037,6 +1046,7 @@ class ProudElasticSearch {
                 }
             }
         }
+
         $post['site_id'] = $hit['_index'];
 
         return $post;
