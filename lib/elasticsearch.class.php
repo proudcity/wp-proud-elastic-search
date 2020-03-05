@@ -792,6 +792,17 @@ class ProudElasticSearch {
 
             // Boost content types (normal search)
             if ( ! empty( $args['proud_teaser_search'] ) || ! empty( $args['proud_search_ajax'] ) ) {
+
+                // reset sort on search
+                if ( ! empty( $formatted_args['sort'] ) ) {
+                    $formatted_args['sort'] = [];
+                    $formatted_args['sort'][0] = [
+                        '_score' => [
+                            'order' => 'desc'
+                        ],
+                    ];
+                } 
+
                 // Boost values for post type
                 $post_type_boost = [
                     'agency'         => 2,
