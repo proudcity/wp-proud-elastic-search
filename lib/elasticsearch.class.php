@@ -170,6 +170,9 @@ class ProudElasticSearch {
         add_filter( 'ep_elasticpress_enabled', array( $this, 'ep_enabled' ), 10, 2 );
         // Modify proud teaser filters
         add_action( 'proud-teaser-filters', array( $this, 'proud_teaser_filters' ), 10, 2 );
+        // Modify proud teaser display if there is a search active
+        add_filter( 'proud_teaser_post_type', array( $this, 'proud_teaser_post_type' ), 10, 2 );
+        add_filter( 'proud_teaser_display_type', array( $this, 'proud_teaser_display_type' ), 10, 2 );
         // Add weighting, ect
         add_filter( 'ep_formatted_args', array( $this, 'ep_weight_search' ), 10, 2 );
         // Alter request path
@@ -946,6 +949,26 @@ class ProudElasticSearch {
         }
 
         return $options;
+    }
+
+    /**
+     * Alter search teaser post display settings
+     */
+    public function proud_teaser_post_type($post_type, $query_args) {
+        if ( ! empty( $query_args['s'] ) ) {
+            return 'search';
+        }
+        return $post_type;
+    }
+
+        /**
+     * Alter search teaser display settings
+     */
+    public function proud_teaser_display_type($display_type, $query_args) {
+        if ( ! empty( $query_args['s'] ) ) {
+            return 'search';
+        }
+        return $display_type;
     }
 
     /**
