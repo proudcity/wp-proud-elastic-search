@@ -9,6 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 define( 'ATTACHMENT_MAX', 25 );
 define( 'EVENT_DATE_FIELD', '_event_start_local' );
+define( 'MEETING_DATE_FIELD', 'datetime' );
 
 class ProudElasticSearch {
 
@@ -672,6 +673,11 @@ class ProudElasticSearch {
                         $query_args['orderby'] = 'meta.' . EVENT_DATE_FIELD . '.datetime';
                     }
 
+                    // We're a meeting date field, alter the ordering
+                    if ( ! empty( $query_args['meta_key'] ) && $query_args['meta_key'] === MEETING_DATE_FIELD ) {
+                        $query_args['orderby'] = 'meta.' . MEETING_DATE_FIELD . '.datetime';
+                    }
+
                     // Alter category listings?
                     $alter_cats = ! empty( $config['taxonomy'] )
                                   && ! empty( $config['form_id_base'] );
@@ -712,6 +718,8 @@ class ProudElasticSearch {
                 }
             }
         }
+
+        
 
         return $query_args;
     }
