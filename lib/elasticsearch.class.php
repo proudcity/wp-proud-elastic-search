@@ -499,8 +499,8 @@ class ProudElasticSearch {
                 continue;
             }
 
-            $post_args['attachments'][] = $meta['url'];
-            $attachments_meta[]         = $meta;
+            $post_args['attachments'] = [ $meta['url'] ];
+            $attachments_meta         = [ $meta ];
         }
 
         if ( ! empty( $post_args['attachments'] ) ) {
