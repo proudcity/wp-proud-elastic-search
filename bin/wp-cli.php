@@ -9,13 +9,33 @@ WP_CLI::add_command( 'proud-elastic', 'ProudElasticSearch_CLI' );
 /**
  * CLI Commands for Proud ElasticPress integration
  *
+ * ## EXAMPLES
+ *
+ *     # Index all posts for a site.
+ *     $ wp proud-elastic index-safe
+ *     Success.
+ *
+ *     # Index all non-attachment posts for a site.
+ *     $ wp proud-elastic index-safe-no-attachments
+ *     Success.
+ *
+ *     # Index all attachment posts for a site.
+ *     $ wp proud-elastic index-safe-only-attachments
+ *     Success.
+ * 
+ *     # Delete index then index all posts for a site.
+ *     $ wp proud-elastic mapping-and-index
+ *     Success.
  */
 class ProudElasticSearch_CLI extends WP_CLI_Command {
     /**
-     * Document Safe index method for all posts for a site or network wide
-     * @subcommand index-safe
+     * Document Safe index method for all posts for a site
+     *
+     * @param boolean $normal Index normal (non attachment) content
+     * @param boolean $attachments Index attachment content
+     * @return void
      */
-    public function index_safe( ) {
+    private function index( $normal = true, $attachments = true ) {
         global $proudsearch;
         // Get class instance
         $instance = ProudElasticSearch::factory();
@@ -48,29 +68,62 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
         }
 
         // Run non- attachment
+        if ( $normal ) {
+            $standardCmd = 'elasticpress index --post-type=' . implode( ',', array_keys( $whitelist ) );
 
-        $standardCmd = 'elasticpress index --post-type=' . implode( ',', array_keys( $whitelist ) );
+            WP_CLI::line( sprintf(  __( "\nRunning non-attachment index: '%s'\n", 'wp-proud-search-elastic' ), $standardCmd ) );
 
-        WP_CLI::line( sprintf(  __( "\nRunning non-attachment index: '%s'\n", 'wp-proud-search-elastic' ), $standardCmd ) );
+            sleep ( 1 );
 
-        sleep ( 1 );
+            WP_CLI::runcommand( $standardCmd, $options );
+        }
 
-        WP_CLI::runcommand( $standardCmd, $options );
+        
 
         // Run attachments
         // Use --nobulk to prevent index as opposed to just put /docs/ID
+        if ( $attachments ) {
+            $attachmentsCmd = 'elasticpress index --nobulk --post-type=' . implode( ',', $runSafe );
 
-        $attachmentsCmd = 'elasticpress index --nobulk --post-type=' . implode( ',', $runSafe );
+            WP_CLI::line( sprintf(  __( "\nRunning attachments index: '%s'\n", 'wp-proud-search-elastic' ), $attachmentsCmd ) );
 
-        WP_CLI::line( sprintf(  __( "\nRunning attachments index: '%s'\n", 'wp-proud-search-elastic' ), $attachmentsCmd ) );
+            sleep ( 1 );
 
-        sleep ( 1 );
+            WP_CLI::runcommand( $attachmentsCmd, $options );
+        }
+    }
 
-        WP_CLI::runcommand( $attachmentsCmd, $options );
+    /**
+     * Document Safe index method for all posts for a site
+     * 
+     * @subcommand index-safe
+     */
+    public function index_safe( ) {
+        $this->index();
+    }
+
+    /**
+     * Document Safe index method for all non-attachment posts for a site
+     * 
+     * @subcommand index-safe-no-attachments
+     */
+    public function index_safe_no_attachments( ) {
+        return;
+        $this->index( true, false );
+    }
+
+    /**
+     * Document Safe index method for all attachment posts for a site
+     * 
+     * @subcommand index-safe-only-attachments
+     */
+    public function index_safe_only_attachments( ) {
+        $this->index( false, true );
     }
 
     /**
      * Puts mapping then calls index-safe
+     * 
      * @subcommand mapping-and-index
      */
     public function mapping_and_index( ) {

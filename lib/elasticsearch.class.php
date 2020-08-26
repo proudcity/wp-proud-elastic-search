@@ -191,6 +191,7 @@ class ProudElasticSearch {
         // Make sure our fields are added
         add_filter( 'ep_search_post_return_args', array( $this, 'ep_search_post_return_args' ) );
         // Helpers to display post as we want
+        add_filter( 'proud_teaser_thumbnail', array( $this, 'proud_teaser_thumbnail' ), 10, 2 );
         add_filter( 'the_title', array( $this, 'the_title' ), 10, 2 );
         add_filter( 'post_link', array( $this, 'post_link' ), 10, 2 );
         add_filter( 'post_type_link', array( $this, 'post_link' ), 10, 2 );
@@ -256,6 +257,8 @@ class ProudElasticSearch {
         $allowed_protected_keys[] = EVENT_DATE_FIELD;
         // Adding agency "exlude lists" meta
         $allowed_protected_keys[] = 'list_exclude';
+        // Adding images markup
+        $allowed_protected_keys[] = 'post_thumbnails';
 
         return $allowed_protected_keys;
     }
@@ -517,6 +520,39 @@ class ProudElasticSearch {
     }
 
     /**
+     * Add thumbnail image markup
+     */
+    public function process_thumbnails( &$post_args ) {
+        if ( ! get_post_thumbnail_id( $post_args['ID'] ) ) {
+            return;
+        }
+
+        if ( empty( $post_args['meta'] ) ) {
+            $post_args['meta'] = [];
+        }
+
+        $images = [
+            'default' => get_the_post_thumbnail( $post_args['ID'] ),
+            'card-thumb' => get_the_post_thumbnail( $post_args['ID'], 'card-thumb' ),
+            'large' => get_the_post_thumbnail( $post_args['ID'], 'large' ),
+            'featured-teaser' => get_the_post_thumbnail( $post_args['ID'], 'featured-teaser' ),
+        ];
+        
+        $post_args['meta']['post_thumbnails'] = [
+            [
+                'value' => json_encode($images),
+                'raw' => "0",
+                'long' => 0,
+                'double' => (float) 0,
+                'boolean' => false,
+                'date' => "1971-01-01",
+                'datetime' => "1971-01-01 00:00:01",
+                'time' => "00:00:01",
+            ]
+        ];
+    }
+
+    /**
      * Alters outgoing post sync
      */
     public function ep_post_sync_args_post_prepare_meta( $post_args ) {
@@ -528,6 +564,8 @@ class ProudElasticSearch {
                 $post_args['post_content'] = $post->post_content;
             }
         }
+
+        $this->process_thumbnails($post_args);
 
         // IF we're processing attachments
         if ( $this->attachments_api ) {
@@ -616,12 +654,43 @@ class ProudElasticSearch {
                         && 'all' !== $config['form_instance']['filter_index'];
         if ( $filter_index ) {
             $query_args['filter_index'] = $config['form_instance']['filter_index'];
-        }
+        } 
+        
         // Filter for site index by teaser settings
         if ( ! empty( $config['options']['elastic_index'] ) ) {
             $query_args['filter_index'] = $config['options']['elastic_index'] === 'all'
                 ? $this->ep_global_alias_full( true )
                 : $config['options']['elastic_index'];
+
+            // Add external categories?
+            $addExternalCats = $config['options']['elastic_index'] !== $this->index_name
+                && ! empty( $config['options']['external_categories'] );
+            if ( $addExternalCats ) {
+                try {
+                    $terms = explode(
+                        ',', 
+                        preg_replace( '/[^0-9\,]/', '', sanitize_text_field( $config['options']['external_categories'] ) )
+                    );
+                } catch(\Exception $e) {
+                    return;
+                }
+
+                if ( empty ( $query_args['tax_query'][0]['terms'] ) ) {
+                    $taxonomy = \Proud\Core\TeaserList::taxonomy_name( $query_args['post_type'] );
+                    $query_args['tax_query'] = [
+                        [
+                          'taxonomy' => $taxonomy,
+                          'field'    => 'term_id',
+                          'terms'    => [],
+                          'operator' => 'IN',
+                        ]
+                      ];    
+                }
+
+                foreach($terms as $term) {
+                    $query_args['tax_query'][0]['terms'][] = (int) $term;
+                }
+            }
         }
     }
 
@@ -929,6 +998,23 @@ class ProudElasticSearch {
             return $settings;
         }
         if ( ! empty( $this->attachments[ $post_type ] ) || $post_type === 'post' || $post_type === 'event' ) {
+            // Add option to manually input categories
+            $settings['external_categories'] = [
+                '#title'         => __( '(Advanced) External category ids', 'proud-teaser' ),
+                '#type'          => 'text',
+                '#default_value' => '',
+                '#description'   => 'In order to add categories from an external site, navigate to that site (https://subsite.org), locate the Post Type (Documents, Meetings, etc) in the left admin sidebar, click into the "Categories" section, navigate to the posts you care about, and find the "tag_ID" number in the url.  Enter all desired values separated by commas ex. 123,456,789',
+                '#states' => [
+                    'visible' => [
+                        'elastic_index' => [
+                            'operator' => '!=',
+                            'value' => [$this->index_name],
+                            'glue' => '||'
+                        ],
+                    ],
+                ],
+            ];
+
             $options = array_map( function ( $o ) {
                 return $o["name"];
             }, $this->search_cohort );
@@ -952,6 +1038,10 @@ class ProudElasticSearch {
      * Modify teaser settings to allow certain index to be searched
      */
     public function proud_teaser_extra_options( $options, $instance ) {
+        if ( ! empty( $instance['external_categories'] ) ) {
+            $options['external_categories'] = $instance['external_categories'];
+        }
+
         if ( ! empty( $instance['elastic_index'] ) ) {
             $options['elastic_index'] = $instance['elastic_index'];
         }
@@ -969,7 +1059,7 @@ class ProudElasticSearch {
         return $post_type;
     }
 
-        /**
+    /**
      * Alter search teaser display settings
      */
     public function proud_teaser_display_type($display_type, $query_args) {
@@ -1101,6 +1191,25 @@ class ProudElasticSearch {
         $args[] = 'search_highlight';
 
         return $args;
+    }
+
+    /**
+     * Alter search teaser thumbnail for elastic results
+     */
+    public function proud_teaser_thumbnail($thumbnail, $size) {
+        global $post;
+        if ( ! $this->is_local( $post ) && ! empty( $post->meta['post_thumbnails'][0]['value'] ) ) {
+            try {
+                $thumbnails = json_decode($post->meta['post_thumbnails'][0]['value']);
+                $thumbnail = is_string( $size ) && ! empty ($thumbnails->{$size} )
+                    ? $thumbnails->{$size}
+                    : ( ! empty( $thumbnails->default ) ? $thumbnails->default : '' );
+            } catch(\Exception $e) {
+                // do nothing
+            }
+        }
+
+        return $thumbnail;
     }
 
     /**
