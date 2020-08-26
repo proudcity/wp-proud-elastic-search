@@ -35,7 +35,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
      * @param boolean $attachments Index attachment content
      * @return void
      */
-    private function index( $normal = true, $attachments = true ) {
+    private function _index( $normal = true, $attachments = true ) {
         global $proudsearch;
         // Get class instance
         $instance = ProudElasticSearch::factory();
@@ -99,7 +99,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
      * @subcommand index-safe
      */
     public function index_safe( ) {
-        $this->index();
+        $this->_index();
     }
 
     /**
@@ -108,8 +108,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
      * @subcommand index-safe-no-attachments
      */
     public function index_safe_no_attachments( ) {
-        return;
-        $this->index( true, false );
+        $this->_index( true, false );
     }
 
     /**
@@ -118,7 +117,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
      * @subcommand index-safe-only-attachments
      */
     public function index_safe_only_attachments( ) {
-        $this->index( false, true );
+        $this->_index( false, true );
     }
 
     /**
