@@ -191,6 +191,7 @@ class ProudElasticSearch {
         // Make sure our fields are added
         add_filter( 'ep_search_post_return_args', array( $this, 'ep_search_post_return_args' ) );
         // Helpers to display post as we want
+        add_filter( 'proud_teaser_has_thumbnail', array( $this, 'proud_teaser_has_thumbnail' ), 10, 1);
         add_filter( 'proud_teaser_thumbnail', array( $this, 'proud_teaser_thumbnail' ), 10, 2 );
         add_filter( 'the_title', array( $this, 'the_title' ), 10, 2 );
         add_filter( 'post_link', array( $this, 'post_link' ), 10, 2 );
@@ -1194,9 +1195,21 @@ class ProudElasticSearch {
     }
 
     /**
+     * Alter search teaser thumbnail check for elastic results
+     */
+    public function proud_teaser_has_thumbnail( $thumbnail ) {
+        global $post;
+        if ( ! $this->is_local( $post ) && ! empty( $post->meta['post_thumbnails'][0]['value'] ) ) {
+            return true;
+        }
+
+        return $thumbnail;
+    }
+
+    /**
      * Alter search teaser thumbnail for elastic results
      */
-    public function proud_teaser_thumbnail($thumbnail, $size) {
+    public function proud_teaser_thumbnail( $thumbnail, $size ) {
         global $post;
         if ( ! $this->is_local( $post ) && ! empty( $post->meta['post_thumbnails'][0]['value'] ) ) {
             try {
