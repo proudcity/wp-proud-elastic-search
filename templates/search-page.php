@@ -5,7 +5,7 @@
     <?php $search_results->print_filters(); ?>
   </div>
   <div class="col-md-9">
-    <h3 class="margin-top-none">Results</h3>
+    <h2 class="h3 margin-top-none">Results</h2>
     <?php $search_results->print_list(); ?>
   </div>
 </div>
