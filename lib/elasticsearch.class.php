@@ -359,7 +359,14 @@ class ProudElasticSearch {
         $args['body']->attachments_meta = $attachments_meta;
         $args['body']->post             = $post_args;
 
-        wp_remote_request( $this->attachments_api, $args );
+        // Converting body to array
+        $args['body'] = (array) $args['body'];
+
+        try {
+            wp_remote_request( $this->attachments_api, $args );
+        } catch (\Exception $e) {
+            error_log( '[elasticsearch] Failed sending to elastic docs API: ' . $e->getMessage() );
+        }
     }
 
     /**
