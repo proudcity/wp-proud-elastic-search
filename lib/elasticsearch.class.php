@@ -174,10 +174,16 @@ class ProudElasticSearch {
         // Modify proud teaser display if there is a search active
         add_filter( 'proud_teaser_post_type', array( $this, 'proud_teaser_post_type' ), 10, 2 );
         add_filter( 'proud_teaser_display_type', array( $this, 'proud_teaser_display_type' ), 10, 2 );
-        // Add weighting, ect
+        // Default "Fuzziness"
+        add_filter( 'ep_post_match_fuzziness' , array( $this, 'ep_post_match_fuzziness' ), 10, 3 );
+        // Allow ep to weight "decaying"?
+        add_filter( 'ep_is_decaying_enabled', [ $this, 'ep_is_decaying_enabled' ], 10, 3 );
+        // Allow ep to apply weighting?
+        add_filter( 'ep_enable_do_weighting', [ $this, 'ep_enable_do_weighting' ], 10, 4 );
+        // Add our weighting, ect
         add_filter( 'ep_formatted_args', array( $this, 'ep_weight_search' ), 10, 2 );
         // Alter request path
-        add_filter( 'ep_search_request_path', array( $this, 'ep_search_request_path' ), 10, 4 );
+        add_filter( 'ep_search_request_path', array( $this, 'ep_search_request_path' ), 10, 5 );
         // Get aggregations
         add_action( 'ep_retrieve_aggregations', array( $this, 'ep_retrieve_aggregations' ), 10, 1 );
         // Modify form output
@@ -653,7 +659,7 @@ class ProudElasticSearch {
     public function query_args( &$query_args, $config = [] ) {
         $query_args['proud_ep_integrate'] = true;
         // Set to all be be processed by ep_global_alias
-        $query_args['sites'] = 'all';
+        $query_args['site__in'] = 'all';
         if ( 'full' !== $this->agent_type ) {
             return;
         }
@@ -796,7 +802,7 @@ class ProudElasticSearch {
             }
         }
 
-        
+        echo '<h2>pc query_alter $query_args</h2><pre>' . htmlspecialchars(json_encode($query_args, JSON_PRETTY_PRINT)) . '</pre>';        
 
         return $query_args;
     }
@@ -813,6 +819,64 @@ class ProudElasticSearch {
     }
 
     /**
+     * Filter fuzziness for match query
+     *
+     * @hook ep_{$indexable_slug}_match_fuzziness
+     * @since 4.3.0
+     * @param {string|int} $fuzziness      Fuzziness
+     * @param {array}      $search_fields  Search fields
+     * @param {array}      $query_vars     Query variables
+     * @return {string} New fuzziness
+     */
+    public function ep_post_match_fuzziness( $fuzziness, $search_fields, $query_vars ) {
+        // @TODO implement this instead?
+        var_dump('ep_post_match_fuzziness IS HAPPENING NOW');
+        return $fuzziness;
+    }
+
+    /**
+	 * Conditionally disable decaying by date
+	 *
+	 * @param bool  $is_decaying_enabled Whether decay by date is enabled or not
+	 * @param array $settings            Settings
+	 * @param array $args                WP_Query args
+	 * @return bool
+	 */
+    public function ep_is_decaying_enabled ( $is_decaying_enabled, $settings, $args ) {
+        // @TODO enable this for articles only?
+        return false;
+    }
+
+    /**
+     * Filter whether to enable weighting configuration
+     *
+     * @hook ep_enable_do_weighting
+     * @since 4.2.2
+     * @param  {bool}  Whether to enable weight config, defaults to true for search requests that are public or REST
+     * @param  {array} $weight_config Current weight config
+     * @param  {array} $args WP Query arguments
+     * @param  {array} $formatted_args Formatted ES arguments
+     * @return  {bool} Whether to use weighting configuration
+     */
+    public function ep_enable_do_weighting( $do_weighting, $weight_config, $args, $formatted_args ) {
+        // @TODO better to integrate with this?
+        return false;
+    }
+
+    /**
+     * Filter weighting defaults for post type
+     *
+     * @hook ep_weighting_default_post_type_weights
+     * @param  {array} $post_type_defaults Current weighting defaults
+     * @param  {string} $post_type Current post type
+     * @return  {array} New defaults
+     */
+    public function ep_weighting_default_post_type_weights( $post_type_defaults, $post_type ) {
+        // @TODO implement this instead?
+        return $post_type_defaults;
+    }
+
+    /**
      * Search weight
      *
      * @param  array $formatted_args
@@ -822,12 +886,14 @@ class ProudElasticSearch {
      * @return array
      */
     public function ep_weight_search( $formatted_args, $args ) {
-
+        echo '<h2>pc ep_weight_search $formatted_args</h2><pre>' . htmlspecialchars(json_encode($formatted_args, JSON_PRETTY_PRINT)) . '</pre>';
         if ( ! empty( $args['s'] ) ) {
 
             // Boost title ?
+            var_dump($formatted_args['query']['bool']['should'][0]['multi_match']['fields']);
+            var_dump($formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0]);
             $boost_title = ! empty( $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] )
-                           && 'post_title' === $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0];
+                           && strpos( $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0], 'post_title' ) !== false;
 
             if ( $boost_title ) {
                 $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] = 'post_title^3';
@@ -853,80 +919,82 @@ class ProudElasticSearch {
                 }
 
                 // Drop fuzzy searching
-                $drop_fuzzy = ! empty( $formatted_args['query']['bool']['should'][2]['multi_match']['fuzziness'] )
-                              && $formatted_args['query']['bool']['should'][2]['multi_match']['fuzziness'] > 0;
+                $drop_fuzzy = ! empty( $formatted_args['query']['bool']['should'][1]['multi_match']['fuzziness'] );
+                    // && $formatted_args['query']['bool']['should'][2]['multi_match']['fuzziness'] > 0
                 if ( $drop_fuzzy ) {
-                    $formatted_args['query']['bool']['should'][2]['multi_match']['fuzziness'] = 0;
+                    $formatted_args['query']['bool']['should'][1]['multi_match']['fuzziness'] = 0;
                 }
             }
 
-            $weight_search = [
-                'function_score' => [
-                    'query'     => $formatted_args['query'],
-                    'functions' => []
-                ]
-            ];
-
-            // Add some weighting for menu_order
-            $weight_search['function_score']['functions'][] = [
-                'linear' => [
-                    'menu_order' => [
-                        'origin' => 0,
-                        'scale'  => 1000,
-                        'decay'  => 0.8,
+            if ( $this->ep_is_decaying_enabled( false, [], $args ) === false ) {
+                $weight_search = [
+                    'function_score' => [
+                        'query'     => $formatted_args['query'],
+                        'functions' => []
                     ]
-                ]
-            ];
-
-            // Boost content types (normal search)
-            if ( ! empty( $args['proud_teaser_search'] ) || ! empty( $args['proud_search_ajax'] ) ) {
-
-                // reset sort on search
-                if ( ! empty( $formatted_args['sort'] ) ) {
-                    $formatted_args['sort'] = [];
-                    $formatted_args['sort'][0] = [
-                        '_score' => [
-                            'order' => 'desc'
-                        ],
-                    ];
-                } 
-
-                // Boost values for post type
-                $post_type_boost = [
-                    'agency'         => 2,
-                    'question'       => 1.9,
-                    'payment'        => 1.9,
-                    'issue'          => 1.9,
-                    'page'           => 1.3,
-                    'event'          => 1.2,
-                    'proud_location' => 1.1
                 ];
 
-                foreach ( $post_type_boost as $name => $boost ) {
-                    $weight_search['function_score']['functions'][] = [
-                        'filter' => [
-                            'term' => [
-                                'post_type.raw' => $name
-                            ]
-                        ],
-                        'weight' => $boost
-                    ];
-                }
-
-                // Add weighting for events
                 // Add some weighting for menu_order
                 $weight_search['function_score']['functions'][] = [
-                    'gauss' => [
-                        'meta.' . EVENT_DATE_FIELD . '.date' => [
-                            'scale'  => '10d',
-                            'offset' => '5d',
-                            'decay'  => 0.5
+                    'linear' => [
+                        'menu_order' => [
+                            'origin' => 0,
+                            'scale'  => 1000,
+                            'decay'  => 0.8,
                         ]
                     ]
                 ];
-            }
 
-            $formatted_args['query'] = $weight_search;
+                // Boost content types (normal search)
+                if ( ! empty( $args['proud_teaser_search'] ) || ! empty( $args['proud_search_ajax'] ) ) {
+
+                    // reset sort on search
+                    if ( ! empty( $formatted_args['sort'] ) ) {
+                        $formatted_args['sort'] = [];
+                        $formatted_args['sort'][0] = [
+                            '_score' => [
+                                'order' => 'desc'
+                            ],
+                        ];
+                    } 
+
+                    // Boost values for post type
+                    $post_type_boost = [
+                        'agency'         => 2,
+                        'question'       => 1.9,
+                        'payment'        => 1.9,
+                        'issue'          => 1.9,
+                        'page'           => 1.3,
+                        'event'          => 1.2,
+                        'proud_location' => 1.1
+                    ];
+
+                    foreach ( $post_type_boost as $name => $boost ) {
+                        $weight_search['function_score']['functions'][] = [
+                            'filter' => [
+                                'term' => [
+                                    'post_type.raw' => $name
+                                ]
+                            ],
+                            'weight' => $boost
+                        ];
+                    }
+
+                    // Add weighting for events
+                    // Add some weighting for menu_order
+                    $weight_search['function_score']['functions'][] = [
+                        'gauss' => [
+                            'meta.' . EVENT_DATE_FIELD . '.date' => [
+                                'scale'  => '10d',
+                                'offset' => '5d',
+                                'decay'  => 0.5
+                            ]
+                        ]
+                    ];
+                }
+
+                $formatted_args['query'] = $weight_search;
+            }
         }
 
         // We processing attachments?
@@ -936,7 +1004,9 @@ class ProudElasticSearch {
             $formatted_args['highlight'] = [
                 'fields' => [
                     'attachments.attachment.content' => new stdClass,
-                    'post_content'                   => new stdClass,
+                    'post_content'                   => [
+                        'type' => 'plain',
+                    ],
                 ]
             ];
 
@@ -945,7 +1015,17 @@ class ProudElasticSearch {
             $formatted_args['_source'] = [
                 'excludes' => [ 'attachments*data', 'attachments*content' ]
             ];
-        }
+        } 
+        // else {
+        //     // Add highlighting for attachments
+        //     $formatted_args['highlight'] = [
+        //         'fields' => [
+        //             'post_content' => [
+        //                 'type' => 'plain',
+        //             ],
+        //         ]
+        //     ];
+        // }
 
         // A make sure sort doesn't break on "field doesn't exist"
         if ( ! empty( $formatted_args['sort'] ) ) {
@@ -965,6 +1045,8 @@ class ProudElasticSearch {
             [ $this->index_name => 1.1 ]
         ];
 
+        // var_dump( $formatted_args);
+
         return $formatted_args;
     }
 
@@ -979,7 +1061,7 @@ class ProudElasticSearch {
      * @since  2.1
      * @return string
      */
-    public function ep_search_request_path( $path, $args, $scope, $query_args ) {
+    public function ep_search_request_path( $path, $index, $type, $query, $query_args ) {
         if ( ! empty( $query_args['filter_index'] ) ) {
             $path = $query_args['filter_index'] . '/post/_search';
         }
@@ -1174,6 +1256,7 @@ class ProudElasticSearch {
      * Alters posts returned from elastic server
      */
     public function ep_retrieve_the_post( $post, $hit ) {
+        echo '<pre>' . htmlspecialchars(json_encode($hit, JSON_PRETTY_PRINT)) . '</pre>';
         // Deal with highlights
         if ( ! empty( $hit['highlight'] ) ) {
             $post['search_highlight'] = [];
