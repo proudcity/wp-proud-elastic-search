@@ -7,6 +7,8 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit; // Exit if accessed directly.
 }
 
+require_once( plugin_dir_path(__FILE__) . '../../elasticpress/elasticpress.php' );
+
 define( 'ATTACHMENT_MAX', 25 );
 define( 'EVENT_DATE_FIELD', '_event_start_local' );
 define( 'MEETING_DATE_FIELD', 'datetime' );
@@ -15,7 +17,7 @@ class ProudElasticSearch {
 
     /**
      * Array of sites that elastic search is using
-     * @var string
+     * @var array
      */
     public $search_cohort;
 
@@ -70,6 +72,18 @@ class ProudElasticSearch {
     public static $aggregations;
 
     /**
+     * URL to post to the documents helper api
+     *
+     * @var string
+     */
+    public $attachments_api;
+
+    /**
+     * @var ElasticPress\Feature\Documents\Documents
+     */
+    public $EPDocuments;
+
+    /**
      * Constructor
      */
     public function __construct() {
@@ -94,11 +108,15 @@ class ProudElasticSearch {
         // Deal with elastic mapping
         // -----------------------------------
 
+        add_filter( 'ep_meta_mode', [ $this, 'ep_meta_mode' ] );
+
         // DOCUMENTS: Alter mapping sent to ES (USE STOCK EP DOCUMENTS FUNCs)
         if ( $this->attachments_api ) {
-            add_action( 'ep_cli_put_mapping', 'ep_documents_create_pipeline' );
-            add_action( 'ep_dashboard_put_mapping', 'ep_documents_create_pipeline' );
-            add_filter( 'ep_config_mapping', 'ep_documents_attachments_mapping' );
+            $this->EPDocuments = new ElasticPress\Feature\Documents\Documents();
+            add_action( 'ep_cli_put_mapping', [ $this->EPDocuments, 'create_pipeline' ] );
+            add_action( 'ep_dashboard_put_mapping', [ $this->EPDocuments, 'create_pipeline' ] );
+            add_filter( 'ep_config_mapping', [ $this->EPDocuments, 'attachments_mapping' ] );
+            // add_filter( 'ep_post_mapping', [ $this->EPDocuments, 'attachments_mapping' ] );
         }
 
         // Allow meta mappings
@@ -109,6 +127,9 @@ class ProudElasticSearch {
 
         // Search all in cohort
         if ( $this->agent_type === 'full' ) {
+            if ( ! defined( 'EP_IS_NETWORK' )) {
+                define( 'EP_IS_NETWORK', true );
+            }
             add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_full' ) );
         } // Search only this site
         else {
@@ -168,7 +189,7 @@ class ProudElasticSearch {
         add_filter( 'wpss_search_query_args', array( $this, 'query_alter' ), 10, 2 );
         add_filter( 'proud_teaser_query_args', array( $this, 'query_alter' ), 10, 2 );
         // Enable elastic search if
-        add_filter( 'ep_elasticpress_enabled', array( $this, 'ep_enabled' ), 10, 2 );
+        add_filter( 'ep_elasticpress_enabled', array( $this, 'ep_enabled' ), 20, 2 );
         // Modify proud teaser filters
         add_action( 'proud-teaser-filters', array( $this, 'proud_teaser_filters' ), 10, 2 );
         // Modify proud teaser display if there is a search active
@@ -257,7 +278,16 @@ class ProudElasticSearch {
     }
 
     /**
+     * Returns the current meta mode. 
+     * see Weighting->get_meta_mode
+     */
+    public function ep_meta_mode( $meta_mode ) {
+        return 'auto';
+    }
+
+    /**
      * Alters es mapping
+     * see Post->get_distinct_meta_field_keys_db
      */
     public function ep_prepare_meta_allowed_protected_keys( $allowed_protected_keys ) {
         // Adding event end timestamp
@@ -411,6 +441,8 @@ class ProudElasticSearch {
     public function get_attachment_meta( $post_args, $attachment_field ) {
         // Missing attachment value
         if ( empty( $post_args['meta'][ $attachment_field ][0]['value'] ) ) {
+            // error_log('proud:get_attachment_meta 1 ' . json_encode($post_args));
+            // error_log('proud:get_attachment_meta 1.1 ' . json_encode($attachment_field));
             return [];
         }
 
@@ -418,8 +450,8 @@ class ProudElasticSearch {
 
         if ( empty( $post_args['meta'][ $field_meta_key ][0]['value'] ) ) {
             // @TODO load these from fid?
-            var_dump( 'get_attachment_meta(): no meta' );
-
+            // var_dump( 'get_attachment_meta(): no meta' );
+            // error_log('proud:get_attachment_meta 2');
             return [];
         }
 
@@ -428,7 +460,7 @@ class ProudElasticSearch {
             $meta = json_decode( $post_args['meta'][ $field_meta_key ][0]['value'], true );
         } catch ( \Exception $e ) {
             error_log( $e );
-
+            // error_log('proud:get_attachment_meta 3');
             return [];
         }
 
@@ -439,11 +471,13 @@ class ProudElasticSearch {
                 $meta['url'] = $post_args['meta'][ $attachment_field ][0]['value'];
             } else {
                 // @TODO anything?
-                var_dump( 'get_attachment_meta(): no url' );
-
+                // var_dump( 'get_attachment_meta(): no url' );
+                // error_log('proud:get_attachment_meta 4');
                 return [];
             }
         }
+
+        // error_log('proud:get_attachment_meta 5');
 
         return $meta;
     }
@@ -458,13 +492,19 @@ class ProudElasticSearch {
     public function attachment_meta_suitable( $meta ) {
         // Don't have suitable data
         if ( empty( $meta['mime'] ) || empty( $meta['size'] ) ) {
+            // error_log('proud:attachment_meta_suitable 1');
             return false;
         }
 
+        // error_log('proud:attachment_meta_suitable 1.1');
+
         // Don't index
-        if ( ! in_array( $meta['mime'], ep_documents_get_allowed_ingest_mime_types() ) ) {
+        if ( ! in_array( $meta['mime'], $this->EPDocuments->get_allowed_ingest_mime_types() ) ) {
+            // error_log('proud:attachment_meta_suitable 2');
             return false;
         }
+
+        // error_log('proud:attachment_meta_suitable 3');
 
         // Legacy document meta, process
         if ( empty( $meta['size_bytes'] ) ) {
@@ -473,9 +513,11 @@ class ProudElasticSearch {
             $is_small_mb = strripos( $meta['size'], 'mb' )
                            && (int) preg_replace( '/[^0-9]/', '', $meta['size'] ) < ATTACHMENT_MAX;
             if ( $is_small_mb || strripos( $meta['size'], 'kb' ) || strripos( $meta['size'], ' b' ) ) {
+                // error_log('proud:attachment_meta_suitable 4');
                 return true;
             }
 
+            // error_log('proud:attachment_meta_suitable 5');
             return false;
         }
 
@@ -493,16 +535,18 @@ class ProudElasticSearch {
     public function process_attachments( &$post_args, $fields ) {
         // Trying to stop autosave
         if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+            // error_log('proud:process_attachments 1');
             return false;
         }
         // Trying to stop autosave
         if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
+            // error_log('proud:process_attachments 2');
             return false;
         }
         // Meta values still posting (new documents seem to have multiple post points)
         if ( $this->attachment_meta_still_posting( $post_args, $fields ) ) {
-            var_dump( 'process_attachments(): still posting some fields' );
-
+            // var_dump( 'process_attachments(): still posting some fields' );
+            // error_log('proud:process_attachments 3');
             return false;
         }
 
@@ -511,8 +555,9 @@ class ProudElasticSearch {
 
         foreach ( $fields as $attachment_field ) {
             $meta = $this->get_attachment_meta( $post_args, $attachment_field );
-
+            // error_log('proud:process_attachments 4: ' . json_encode( $meta ));
             if ( ! $this->attachment_meta_suitable( $meta ) ) {
+                // error_log('proud:process_attachments 5');
                 continue;
             }
 
@@ -521,6 +566,7 @@ class ProudElasticSearch {
         }
 
         if ( ! empty( $post_args['attachments'] ) ) {
+            // error_log('proud:process_attachments 6');
             $this->post_to_helper_api( $post_args, $attachments_meta );
 
             // Don't overwrite whats already in there
@@ -581,9 +627,13 @@ class ProudElasticSearch {
 
         $this->process_thumbnails($post_args);
 
+        // error_log('proud:ep_post_sync_args_post_prepare_meta 1');
+
         // IF we're processing attachments
         if ( $this->attachments_api ) {
+            // error_log('proud:ep_post_sync_args_post_prepare_meta 2');
             if ( ! empty( $this->attachments[ $post_args['post_type'] ] ) ) {
+                // error_log('proud:ep_post_sync_args_post_prepare_meta 3');
                 // post_type has entry in $attachments, so handle
                 $this->process_attachments( $post_args, $this->attachments[ $post_args['post_type'] ] );
 
@@ -657,21 +707,29 @@ class ProudElasticSearch {
      * Attaches global elastic integation query items
      */
     public function query_args( &$query_args, $config = [] ) {
+        // error_log('elastic query_args 1: '
+        // //  . json_encode([ $query_args, $config ], JSON_PRETTY_PRINT)
+        // );
         $query_args['proud_ep_integrate'] = true;
         // Set to all be be processed by ep_global_alias
         $query_args['site__in'] = 'all';
         if ( 'full' !== $this->agent_type ) {
+            // error_log('elastic query_args hit EXIT');
             return;
         }
+        // error_log('elastic query_args hit 2');
         // Filter for certain site index from form
         $filter_index = ! empty( $config['form_instance']['filter_index'] )
                         && 'all' !== $config['form_instance']['filter_index'];
         if ( $filter_index ) {
             $query_args['filter_index'] = $config['form_instance']['filter_index'];
         } 
+
+        // error_log('elastic query_args hit 3');
         
         // Filter for site index by teaser settings
         if ( ! empty( $config['options']['elastic_index'] ) ) {
+            // error_log('elastic query_args hit 4');
             $query_args['filter_index'] = $config['options']['elastic_index'] === 'all'
                 ? $this->ep_global_alias_full( true )
                 : $config['options']['elastic_index'];
@@ -680,6 +738,7 @@ class ProudElasticSearch {
             $addExternalCats = $config['options']['elastic_index'] !== $this->index_name
                 && ! empty( $config['options']['external_categories'] );
             if ( $addExternalCats ) {
+                // error_log('elastic query_args hit 5');
                 try {
                     $terms = explode(
                         ',', 
@@ -690,6 +749,7 @@ class ProudElasticSearch {
                 }
 
                 if ( empty ( $query_args['tax_query'][0]['terms'] ) ) {
+                    // error_log('elastic query_args hit 6');
                     $taxonomy = \Proud\Core\TeaserList::taxonomy_name( $query_args['post_type'] );
                     $query_args['tax_query'] = [
                         [
@@ -706,6 +766,8 @@ class ProudElasticSearch {
                 }
             }
         }
+
+        // error_log('elastic query_args hit LAST ' . json_encode([ $query_args, $config ], JSON_PRETTY_PRINT));
     }
 
     /**
@@ -723,6 +785,14 @@ class ProudElasticSearch {
                        || ! empty( $query_args['proud_teaser_search'] ) // site search
                        || ! empty( $query_args['proud_teaser_query'] ) // teaser listings
                        || ! empty( $config['options']['elastic_index'] ); // teaser listing with index
+
+        // echo json_encode($query_args);
+
+        // error_log('elastic query_alter 2: ' . ($run_elastic ? 'RUNNING' : 'NOPE!!!!!') . ' -- ' . json_encode([ $query_args, $config ], JSON_PRETTY_PRINT));
+
+        // if (!$run_elastic) {
+        //     echo json_encode([ $query_args, $config ]);
+        // }
 
         if ( $run_elastic ) {
             // Ajax search
@@ -802,7 +872,8 @@ class ProudElasticSearch {
             }
         }
 
-        echo '<h2>pc query_alter $query_args</h2><pre>' . htmlspecialchars(json_encode($query_args, JSON_PRETTY_PRINT)) . '</pre>';        
+        // @TODO debug
+        // echo '<h2>pc query_alter $query_args</h2><pre>' . htmlspecialchars(json_encode($query_args, JSON_PRETTY_PRINT)) . '</pre>';        
 
         return $query_args;
     }
@@ -814,6 +885,8 @@ class ProudElasticSearch {
         if ( isset( $query->query_vars['proud_ep_integrate'] ) && true === $query->query_vars['proud_ep_integrate'] ) {
             $enabled = true;
         }
+
+        // error_log('elastic ep_enabled 1: ' . $enabled);//json_encode([  ], JSON_PRETTY_PRINT));
 
         return $enabled;
     }
@@ -829,8 +902,8 @@ class ProudElasticSearch {
      * @return {string} New fuzziness
      */
     public function ep_post_match_fuzziness( $fuzziness, $search_fields, $query_vars ) {
-        // @TODO implement this instead?
-        var_dump('ep_post_match_fuzziness IS HAPPENING NOW');
+        // @TODO debug
+        // var_dump('ep_post_match_fuzziness IS HAPPENING NOW');
         return $fuzziness;
     }
 
@@ -886,12 +959,15 @@ class ProudElasticSearch {
      * @return array
      */
     public function ep_weight_search( $formatted_args, $args ) {
-        echo '<h2>pc ep_weight_search $formatted_args</h2><pre>' . htmlspecialchars(json_encode($formatted_args, JSON_PRETTY_PRINT)) . '</pre>';
+        // @TODO debug
+        // echo '<h2>pc ep_weight_search $formatted_args</h2><pre>' . htmlspecialchars(json_encode($formatted_args, JSON_PRETTY_PRINT)) . '</pre>';
         if ( ! empty( $args['s'] ) ) {
 
             // Boost title ?
-            var_dump($formatted_args['query']['bool']['should'][0]['multi_match']['fields']);
-            var_dump($formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0]);
+            // @TODO debug
+            // var_dump($formatted_args['query']['bool']['should'][0]['multi_match']['fields']);
+            // @TODO debug
+            // var_dump($formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0]);
             $boost_title = ! empty( $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] )
                            && strpos( $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0], 'post_title' ) !== false;
 
@@ -1256,7 +1332,8 @@ class ProudElasticSearch {
      * Alters posts returned from elastic server
      */
     public function ep_retrieve_the_post( $post, $hit ) {
-        echo '<pre>' . htmlspecialchars(json_encode($hit, JSON_PRETTY_PRINT)) . '</pre>';
+        // @TODO debug
+        // echo '<pre>HI THERER' . htmlspecialchars(json_encode($hit, JSON_PRETTY_PRINT)) . '</pre>';
         // Deal with highlights
         if ( ! empty( $hit['highlight'] ) ) {
             $post['search_highlight'] = [];
@@ -1268,9 +1345,13 @@ class ProudElasticSearch {
                     $post['search_highlight'][ $key ] = $text;
                 }
             }
+
+            unset( $post['highlight'] );
         }
 
         $post['site_id'] = $hit['_index'];
+
+        // error_log('proud:ep_retrieve_the_post 222222: ' . json_encode([ $post, $hit ], JSON_PRETTY_PRINT));
 
         return $post;
     }
@@ -1280,6 +1361,10 @@ class ProudElasticSearch {
      */
     public function ep_search_post_return_args( $args ) {
         $args[] = 'search_highlight';
+        // Prevent post_content from being supplanted by highlight
+        // $args = array_filter( $args, function ( $fieldKey ) {
+        //     return $fieldKey !== 'post_content111';
+        // } );
 
         return $args;
     }
