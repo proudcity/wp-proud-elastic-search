@@ -103,6 +103,7 @@ class ProudElasticSearch {
         // Alter shard count
         add_filter( 'ep_default_index_number_of_shards', array( $this, 'ep_default_index_number_of_shards' ) );
         // Are we processing attachments?
+        error_log('is doing attachments: ' . defined( 'EP_HELPER_HOST' ));
         $this->attachments_api = defined( 'EP_HELPER_HOST' ) ? EP_HELPER_HOST : false;
 
         // Deal with elastic mapping
@@ -354,7 +355,8 @@ class ProudElasticSearch {
      * Gets the path suffix for a post in elastic
      */
     public function indexed_post_path( $id ) {
-        return trailingslashit( $this->index_name ) . 'post/' . $id;
+        // @TODO was `post` before _doc for pre elastri
+        return trailingslashit( $this->index_name ) . '_doc/' . $id;
     }
 
     /**
@@ -386,7 +388,9 @@ class ProudElasticSearch {
         //Deal with posting
         $args = [
             'method'  => 'POST',
-            'headers' => array(),
+            'headers' => array(
+                'Content-Type' => 'application/json',
+            ),
             'body'    => new stdClass,
         ];
 
@@ -396,7 +400,7 @@ class ProudElasticSearch {
         $args['body']->post             = $post_args;
 
         // Converting body to array
-        $args['body'] = (array) $args['body'];
+        $args['body'] = json_encode( $args['body'] );
 
         try {
             wp_remote_request( $this->attachments_api, $args );
@@ -533,6 +537,7 @@ class ProudElasticSearch {
      * @return bool
      */
     public function process_attachments( &$post_args, $fields ) {
+        error_log('proud:process_attachments 0');
         // Trying to stop autosave
         if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
             // error_log('proud:process_attachments 1');
@@ -550,6 +555,8 @@ class ProudElasticSearch {
             return false;
         }
 
+        error_log('proud:process_attachments 1');
+
         $post_args['attachments'] = [];
         $attachments_meta         = [];
 
@@ -564,6 +571,8 @@ class ProudElasticSearch {
             $post_args['attachments'] = [ $meta['url'] ];
             $attachments_meta         = [ $meta ];
         }
+
+        error_log('proud:process_attachments 2');
 
         if ( ! empty( $post_args['attachments'] ) ) {
             // error_log('proud:process_attachments 6');
@@ -1056,17 +1065,17 @@ class ProudElasticSearch {
                         ];
                     }
 
-                    // Add weighting for events
-                    // Add some weighting for menu_order
-                    $weight_search['function_score']['functions'][] = [
-                        'gauss' => [
-                            'meta.' . EVENT_DATE_FIELD . '.date' => [
-                                'scale'  => '10d',
-                                'offset' => '5d',
-                                'decay'  => 0.5
-                            ]
-                        ]
-                    ];
+                    // // Add weighting for events
+                    // // Add some weighting for menu_order
+                    // $weight_search['function_score']['functions'][] = [
+                    //     'gauss' => [
+                    //         'meta.' . EVENT_DATE_FIELD . '.date' => [
+                    //             'scale'  => '10d',
+                    //             'offset' => '5d',
+                    //             'decay'  => 0.5
+                    //         ]
+                    //     ]
+                    // ];
                 }
 
                 $formatted_args['query'] = $weight_search;
@@ -1139,7 +1148,7 @@ class ProudElasticSearch {
      */
     public function ep_search_request_path( $path, $index, $type, $query, $query_args ) {
         if ( ! empty( $query_args['filter_index'] ) ) {
-            $path = $query_args['filter_index'] . '/post/_search';
+            $path = $query_args['filter_index'] . '/_doc/_search';
         }
 
         return $path;
