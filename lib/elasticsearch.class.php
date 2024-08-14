@@ -99,7 +99,7 @@ class ProudElasticSearch {
         // Set agent type
         $this->agent_type = get_option( 'proud-elastic-agent-type', 'agent' );
         // Alter index names to match our cohort
-        add_filter( 'ep_index_name', array( $this, 'ep_index_name' ), 10, 2 );
+        add_filter( 'ep_index_name', array( $this, 'ep_index_name' ), 10, 3 );
         // Alter shard count
         add_filter( 'ep_default_index_number_of_shards', array( $this, 'ep_default_index_number_of_shards' ) );
         // Are we processing attachments?
@@ -126,16 +126,19 @@ class ProudElasticSearch {
             'ep_prepare_meta_allowed_protected_keys'
         ), 10 );
 
+        add_filter( 'ep_global_alias', array( $this, 'ep_global_alias' ) );
+
         // Search all in cohort
-        if ( $this->agent_type === 'full' ) {
-            if ( ! defined( 'EP_IS_NETWORK' )) {
-                define( 'EP_IS_NETWORK', true );
-            }
-            add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_full' ) );
-        } // Search only this site
-        else {
-            add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_single' ) );
-        }
+        // if ( $this->agent_type === 'full' ) {
+        //     error_log('checking in elastic-wp');
+        //     // if ( ! defined( 'EP_IS_NETWORK' )) {
+        //     //     define( 'EP_IS_NETWORK', true );
+        //     // }
+            
+        // } // Search only this site
+        // else {
+        //     add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_single' ) );
+        // }
 
         // Events-manager stub
         // -----------------------------------
@@ -267,7 +270,8 @@ class ProudElasticSearch {
     /**
      * Alters index name to our set value
      */
-    public function ep_index_name( $index_name, $blog_id ) {
+    public function ep_index_name( $index_name, $blog_id, $indexable ) {
+        error_log('ep_index_name: ' . json_encode([ $this->index_name, $blog_id ]));
         return $this->index_name;
     }
 
@@ -302,6 +306,18 @@ class ProudElasticSearch {
     }
 
     /**
+     * Alters the network alias to use specific values based on state
+     */
+    public function ep_global_alias( $alias ) {
+        error_log('ep_global_alias: ' . $alias );
+        if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
+            return $this->ep_global_alias_full( $alias );
+        } else {
+            return $this->ep_global_alias_single( $alias );
+        }
+    }
+
+    /**
      * Alters the network alias to use specific values
      */
     public function ep_global_alias_single( $alias ) {
@@ -312,6 +328,7 @@ class ProudElasticSearch {
      * Alters the network alias to use specific values
      */
     public function ep_global_alias_full( $alias ) {
+        error_log('ep_global_alias_full: ' . implode( ',', array_keys( $this->search_cohort ) ));
         return implode( ',', array_keys( $this->search_cohort ) );
     }
 
@@ -737,9 +754,10 @@ class ProudElasticSearch {
         // error_log('elastic query_args hit 3');
         
         // Filter for site index by teaser settings
-        if ( ! empty( $config['options']['elastic_index'] ) ) {
+        $teaserIndex = ! empty( $config['options']['elastic_index'] ) ? $config['options']['elastic_index'] : '';
+        if ( $teaserIndex && ( $teaserIndex === 'all' || ! empty( $this->search_cohort[$teaserIndex] ) ) ) {
             // error_log('elastic query_args hit 4');
-            $query_args['filter_index'] = $config['options']['elastic_index'] === 'all'
+            $query_args['filter_index'] = $teaserIndex === 'all'
                 ? $this->ep_global_alias_full( true )
                 : $config['options']['elastic_index'];
 
@@ -797,7 +815,7 @@ class ProudElasticSearch {
 
         // echo json_encode($query_args);
 
-        // error_log('elastic query_alter 2: ' . ($run_elastic ? 'RUNNING' : 'NOPE!!!!!') . ' -- ' . json_encode([ $query_args, $config ], JSON_PRETTY_PRINT));
+        error_log('elastic query_alter 2: ' . ($run_elastic ? 'RUNNING' : 'NOPE!!!!!')); // . ' -- ' . json_encode([ $query_args, $config ], JSON_PRETTY_PRINT));
 
         // if (!$run_elastic) {
         //     echo json_encode([ $query_args, $config ]);
@@ -879,10 +897,12 @@ class ProudElasticSearch {
                     }
                 }
             }
+
+            // error_log('elastic query_alter 3: ' . json_encode([ $query_args, $config ], JSON_PRETTY_PRINT));
         }
 
         // @TODO debug
-        // echo '<h2>pc query_alter $query_args</h2><pre>' . htmlspecialchars(json_encode($query_args, JSON_PRETTY_PRINT)) . '</pre>';        
+        // echo '<h2>pc query_alter $query_args</h2><pre>' . htmlspecialchars(json_encode($query_args, JSON_PRETTY_PRINT)) . '</pre>'; 
 
         return $query_args;
     }
@@ -893,6 +913,22 @@ class ProudElasticSearch {
     public function ep_enabled( $enabled, $query ) {
         if ( isset( $query->query_vars['proud_ep_integrate'] ) && true === $query->query_vars['proud_ep_integrate'] ) {
             $enabled = true;
+        }
+
+        if ( $enabled && $this->agent_type === 'full' ) {
+            $isCli = defined( 'WP_CLI' ) ? WP_CLI : false;
+            error_log('checking in ep_enabled: ' . json_encode([
+                'isCli' => $isCli,
+                'is_admin' => is_admin(),
+                'is_main_query' => $query->is_main_query(), 
+                'is_search' => $query->is_search(),
+                'EP_IS_NETWORK' => defined( 'EP_IS_NETWORK' ) ? EP_IS_NETWORK : false
+            ]));
+            // $skipSet =  || ! $query->is_main_query() || ! $query->is_search();
+            if ( ! $isCli && ! is_admin() && ! defined( 'EP_IS_NETWORK' )) {
+                error_log('did enable network in ep_enabled');
+                define( 'EP_IS_NETWORK', true );
+            }
         }
 
         // error_log('elastic ep_enabled 1: ' . $enabled);//json_encode([  ], JSON_PRETTY_PRINT));
@@ -1150,6 +1186,8 @@ class ProudElasticSearch {
         if ( ! empty( $query_args['filter_index'] ) ) {
             $path = $query_args['filter_index'] . '/_doc/_search';
         }
+
+        error_log('elastic ep_search_request_path 1: ' . $path);
 
         return $path;
     }
