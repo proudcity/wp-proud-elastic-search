@@ -1,5 +1,12 @@
 <?php
 
+//
+// @NOTE Dropping this integration
+// Elasticpress should be interfaced with directly via
+// wp --allow-root elasticpress put-mapping
+// wp --allow-root elasticpress sync
+//
+
 if ( ! defined( 'ABSPATH' ) ) {
     exit; // Exit if accessed directly.
 }
