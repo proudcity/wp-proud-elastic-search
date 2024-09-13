@@ -1,10 +1,34 @@
 <?php
 
+//
+// @NOTE Dropping this integration
+// Elasticpress should be interfaced with directly via
+// wp --allow-root elasticpress put-mapping
+// wp --allow-root elasticpress sync
+//
+
 if ( ! defined( 'ABSPATH' ) ) {
     exit; // Exit if accessed directly.
 }
 
 WP_CLI::add_command( 'proud-elastic', 'ProudElasticSearch_CLI' );
+
+// Deal with: Error: Index failed: Uncaught Error: Call to undefined function ElasticPress\switch_to_blog()
+require_once ABSPATH . WPINC . '/ms-blogs.php';
+
+add_filter('http_request_args', 'bal_http_request_args', 100, 1);
+function bal_http_request_args($r) //called on line 237
+{
+    $r['timeout'] = 60;
+    return $r;
+}
+ 
+add_action('http_api_curl', 'bal_http_api_curl', 100, 1);
+function bal_http_api_curl($handle) //called on line 1315
+{
+    curl_setopt( $handle, CURLOPT_CONNECTTIMEOUT, 60 );
+    curl_setopt( $handle, CURLOPT_TIMEOUT, 60 );
+}
 
 /**
  * CLI Commands for Proud ElasticPress integration
@@ -50,7 +74,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
 
             sleep ( 1 );
 
-            WP_CLI::runcommand( 'elasticpress index' );
+            WP_CLI::runcommand( 'elasticpress sync' );
 
             return;
         }
@@ -69,7 +93,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
 
         // Run non- attachment
         if ( $normal ) {
-            $standardCmd = 'elasticpress index --post-type=' . implode( ',', array_keys( $whitelist ) );
+            $standardCmd = 'elasticpress sync --post-type=' . implode( ',', array_keys( $whitelist ) );
 
             WP_CLI::line( sprintf(  __( "\nRunning non-attachment index: '%s'\n", 'wp-proud-search-elastic' ), $standardCmd ) );
 
@@ -83,7 +107,7 @@ class ProudElasticSearch_CLI extends WP_CLI_Command {
         // Run attachments
         // Use --nobulk to prevent index as opposed to just put /docs/ID
         if ( $attachments ) {
-            $attachmentsCmd = 'elasticpress index --nobulk --post-type=' . implode( ',', $runSafe );
+            $attachmentsCmd = 'elasticpress sync --nobulk --post-type=' . implode( ',', $runSafe );
 
             WP_CLI::line( sprintf(  __( "\nRunning attachments index: '%s'\n", 'wp-proud-search-elastic' ), $attachmentsCmd ) );
 
