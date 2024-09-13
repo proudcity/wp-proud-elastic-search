@@ -103,7 +103,7 @@ class ProudElasticSearch {
         // Alter shard count
         add_filter( 'ep_default_index_number_of_shards', array( $this, 'ep_default_index_number_of_shards' ) );
         // Are we processing attachments?
-        error_log('is doing attachments: ' . defined( 'EP_HELPER_HOST' ));
+        // error_log('is doing attachments: ' . defined( 'EP_HELPER_HOST' ));
         $this->attachments_api = defined( 'EP_HELPER_HOST' ) ? EP_HELPER_HOST : false;
 
         // Deal with elastic mapping
@@ -127,18 +127,6 @@ class ProudElasticSearch {
         ), 10 );
 
         add_filter( 'ep_global_alias', array( $this, 'ep_global_alias' ) );
-
-        // Search all in cohort
-        // if ( $this->agent_type === 'full' ) {
-        //     error_log('checking in elastic-wp');
-        //     // if ( ! defined( 'EP_IS_NETWORK' )) {
-        //     //     define( 'EP_IS_NETWORK', true );
-        //     // }
-            
-        // } // Search only this site
-        // else {
-        //     add_filter( 'ep_global_alias', array( $this, 'ep_global_alias_single' ) );
-        // }
 
         // Events-manager stub
         // -----------------------------------
@@ -271,7 +259,7 @@ class ProudElasticSearch {
      * Alters index name to our set value
      */
     public function ep_index_name( $index_name, $blog_id, $indexable ) {
-        error_log('ep_index_name: ' . json_encode([ $this->index_name, $blog_id ]));
+        // error_log('ep_index_name: ' . json_encode([ $this->index_name, $blog_id ]));
         return $this->index_name;
     }
 
@@ -309,7 +297,7 @@ class ProudElasticSearch {
      * Alters the network alias to use specific values based on state
      */
     public function ep_global_alias( $alias ) {
-        error_log('ep_global_alias: ' . $alias );
+        // error_log('ep_global_alias: ' . $alias );
         if ( defined( 'EP_IS_NETWORK' ) && EP_IS_NETWORK ) {
             return $this->ep_global_alias_full( $alias );
         } else {
@@ -328,7 +316,7 @@ class ProudElasticSearch {
      * Alters the network alias to use specific values
      */
     public function ep_global_alias_full( $alias ) {
-        error_log('ep_global_alias_full: ' . implode( ',', array_keys( $this->search_cohort ) ));
+        // error_log('ep_global_alias_full: ' . implode( ',', array_keys( $this->search_cohort ) ));
         return implode( ',', array_keys( $this->search_cohort ) );
     }
 
@@ -372,7 +360,6 @@ class ProudElasticSearch {
      * Gets the path suffix for a post in elastic
      */
     public function indexed_post_path( $id ) {
-        // @TODO was `post` before _doc for pre elastri
         return trailingslashit( $this->index_name ) . '_doc/' . $id;
     }
 
@@ -394,7 +381,6 @@ class ProudElasticSearch {
     public function post_to_helper_api( $post_args, $attachments_meta ) {
         // For some reason the live version is trying to send this request
         // multiple times in a row...
-        // @TODO figure out why
         static $currently_calling = null;
         if ( $currently_calling === $post_args['ID'] ) {
             return;
@@ -470,8 +456,6 @@ class ProudElasticSearch {
         $field_meta_key = $attachment_field . '_meta';
 
         if ( empty( $post_args['meta'][ $field_meta_key ][0]['value'] ) ) {
-            // @TODO load these from fid?
-            // var_dump( 'get_attachment_meta(): no meta' );
             // error_log('proud:get_attachment_meta 2');
             return [];
         }
@@ -491,8 +475,6 @@ class ProudElasticSearch {
                 // Use document url
                 $meta['url'] = $post_args['meta'][ $attachment_field ][0]['value'];
             } else {
-                // @TODO anything?
-                // var_dump( 'get_attachment_meta(): no url' );
                 // error_log('proud:get_attachment_meta 4');
                 return [];
             }
@@ -554,25 +536,24 @@ class ProudElasticSearch {
      * @return bool
      */
     public function process_attachments( &$post_args, $fields ) {
-        error_log('proud:process_attachments 0');
+        // error_log('proud:process_attachments 0');
         // Trying to stop autosave
         if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
-            // error_log('proud:process_attachments 1');
+            // error_log('proud:process_attachments exit 1');
             return false;
         }
         // Trying to stop autosave
         if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
-            // error_log('proud:process_attachments 2');
+            // error_log('proud:process_attachments exit 2');
             return false;
         }
         // Meta values still posting (new documents seem to have multiple post points)
         if ( $this->attachment_meta_still_posting( $post_args, $fields ) ) {
-            // var_dump( 'process_attachments(): still posting some fields' );
             // error_log('proud:process_attachments 3');
             return false;
         }
 
-        error_log('proud:process_attachments 1');
+        // error_log('proud:process_attachments 1');
 
         $post_args['attachments'] = [];
         $attachments_meta         = [];
@@ -589,7 +570,7 @@ class ProudElasticSearch {
             $attachments_meta         = [ $meta ];
         }
 
-        error_log('proud:process_attachments 2');
+        // error_log('proud:process_attachments 2');
 
         if ( ! empty( $post_args['attachments'] ) ) {
             // error_log('proud:process_attachments 6');
@@ -813,13 +794,7 @@ class ProudElasticSearch {
                        || ! empty( $query_args['proud_teaser_query'] ) // teaser listings
                        || ! empty( $config['options']['elastic_index'] ); // teaser listing with index
 
-        // echo json_encode($query_args);
-
-        error_log('elastic query_alter 2: ' . ($run_elastic ? 'RUNNING' : 'NOPE!!!!!')); // . ' -- ' . json_encode([ $query_args, $config ], JSON_PRETTY_PRINT));
-
-        // if (!$run_elastic) {
-        //     echo json_encode([ $query_args, $config ]);
-        // }
+        // error_log('elastic query_alter 2: ' . ($run_elastic ? 'RUNNING' : 'NOPE!!!!!')); // . ' -- ' . json_encode([ $query_args, $config ], JSON_PRETTY_PRINT));
 
         if ( $run_elastic ) {
             // Ajax search
@@ -901,9 +876,6 @@ class ProudElasticSearch {
             // error_log('elastic query_alter 3: ' . json_encode([ $query_args, $config ], JSON_PRETTY_PRINT));
         }
 
-        // @TODO debug
-        // echo '<h2>pc query_alter $query_args</h2><pre>' . htmlspecialchars(json_encode($query_args, JSON_PRETTY_PRINT)) . '</pre>'; 
-
         return $query_args;
     }
 
@@ -917,16 +889,16 @@ class ProudElasticSearch {
 
         if ( $enabled && $this->agent_type === 'full' ) {
             $isCli = defined( 'WP_CLI' ) ? WP_CLI : false;
-            error_log('checking in ep_enabled: ' . json_encode([
-                'isCli' => $isCli,
-                'is_admin' => is_admin(),
-                'is_main_query' => $query->is_main_query(), 
-                'is_search' => $query->is_search(),
-                'EP_IS_NETWORK' => defined( 'EP_IS_NETWORK' ) ? EP_IS_NETWORK : false
-            ]));
+            // error_log('checking in ep_enabled: ' . json_encode([
+            //     'isCli' => $isCli,
+            //     'is_admin' => is_admin(),
+            //     'is_main_query' => $query->is_main_query(), 
+            //     'is_search' => $query->is_search(),
+            //     'EP_IS_NETWORK' => defined( 'EP_IS_NETWORK' ) ? EP_IS_NETWORK : false
+            // ]));
             // $skipSet =  || ! $query->is_main_query() || ! $query->is_search();
             if ( ! $isCli && ! is_admin() && ! defined( 'EP_IS_NETWORK' )) {
-                error_log('did enable network in ep_enabled');
+                // error_log('did enable network in ep_enabled');
                 define( 'EP_IS_NETWORK', true );
             }
         }
@@ -947,8 +919,6 @@ class ProudElasticSearch {
      * @return {string} New fuzziness
      */
     public function ep_post_match_fuzziness( $fuzziness, $search_fields, $query_vars ) {
-        // @TODO debug
-        // var_dump('ep_post_match_fuzziness IS HAPPENING NOW');
         return $fuzziness;
     }
 
@@ -1004,15 +974,9 @@ class ProudElasticSearch {
      * @return array
      */
     public function ep_weight_search( $formatted_args, $args ) {
-        // @TODO debug
-        // echo '<h2>pc ep_weight_search $formatted_args</h2><pre>' . htmlspecialchars(json_encode($formatted_args, JSON_PRETTY_PRINT)) . '</pre>';
         if ( ! empty( $args['s'] ) ) {
 
             // Boost title ?
-            // @TODO debug
-            // var_dump($formatted_args['query']['bool']['should'][0]['multi_match']['fields']);
-            // @TODO debug
-            // var_dump($formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0]);
             $boost_title = ! empty( $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0] )
                            && strpos( $formatted_args['query']['bool']['should'][0]['multi_match']['fields'][0], 'post_title' ) !== false;
 
@@ -1166,8 +1130,6 @@ class ProudElasticSearch {
             [ $this->index_name => 1.1 ]
         ];
 
-        // var_dump( $formatted_args);
-
         return $formatted_args;
     }
 
@@ -1187,7 +1149,7 @@ class ProudElasticSearch {
             $path = $query_args['filter_index'] . '/_doc/_search';
         }
 
-        error_log('elastic ep_search_request_path 1: ' . $path);
+        // error_log('elastic ep_search_request_path 1: ' . $path);
 
         return $path;
     }
@@ -1231,7 +1193,6 @@ class ProudElasticSearch {
             $options = array_map( function ( $o ) {
                 return $o["name"];
             }, $this->search_cohort );
-            // @TODO make the integration automatic for single site installs
             // Mod index name
             $options[ $this->index_name ] = __( 'This site only', 'wp-proud-search-elastic' );
             $options['all']               = __( 'All Sites', 'wp-proud-search-elastic' );
@@ -1379,8 +1340,6 @@ class ProudElasticSearch {
      * Alters posts returned from elastic server
      */
     public function ep_retrieve_the_post( $post, $hit ) {
-        // @TODO debug
-        // echo '<pre>HI THERER' . htmlspecialchars(json_encode($hit, JSON_PRETTY_PRINT)) . '</pre>';
         // Deal with highlights
         if ( ! empty( $hit['highlight'] ) ) {
             $post['search_highlight'] = [];
@@ -1557,7 +1516,6 @@ class ProudElasticSearch {
      * $arg[3] = (string) appended string
      */
     public function search_post_args( $args, $post ) {
-        // @TODO better way to filter
         if ( $args[2] !== 'See more' ) {
             if ( ! $this->is_local( $post ) ) {
                 $args[1] = '';
