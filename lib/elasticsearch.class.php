@@ -13,6 +13,9 @@ define( 'ATTACHMENT_MAX', 25 );
 define( 'EVENT_DATE_FIELD', '_event_start_local' );
 define( 'MEETING_DATE_FIELD', 'datetime' );
 
+// Init global var for elastic indexing
+$GLOBALS['elasticpress_is_indexing'] = false;
+
 class ProudElasticSearch {
 
     /**
@@ -134,6 +137,13 @@ class ProudElasticSearch {
 
         // Posting to elastic
         // -----------------------------------
+
+        add_filter(
+            'ep_allow_post_content_filtered_index',
+            array( $this, 'ep_allow_post_content_filtered_index' ),
+            10,
+            1
+        );
 
         add_filter( 'ep_post_sync_args_post_prepare_meta', array(
             $this,
@@ -370,6 +380,20 @@ class ProudElasticSearch {
     public function ep_document_request_path( $id ) {
         return $this->indexed_post_path( $id ) . '?pipeline='
                . apply_filters( 'ep_documents_pipeline_id', $this->index_name . '-attachment' );
+    }
+
+    /**
+     * Filter to allow indexing of filtered post content
+     *
+     * @hook ep_allow_post_content_filtered_index
+     * @param  {bool} $ignore True to allow
+     * @return  {bool} New value
+     */
+    public function ep_allow_post_content_filtered_index  ( $ignore ) {
+        // Alert proudcore that we are indexing and should stop proud_teasers from rendering
+        $GLOBALS['elasticpress_is_indexing'] = true;
+
+        return $ignore;
     }
 
     /**
